@@ -24,23 +24,23 @@ class ConvolutionalEncoder:
  """
 
 def __init__(self, constraint_length, generator):
- """
- Initializes the ConvolutionalEncoder.
+    """
+    Initializes the ConvolutionalEncoder.
 
- Args:
- constraint_length (int): The constraint length of the convolutional code.
- generator (list): Generator polynomials in octal (list of strings).
- """
- self.constraint_length = constraint_length
- self.generator = generator
- self.memory = [0] * (constraint_length - 1)
- self.encoded_data = []
+    Args:
+    constraint_length (int): The constraint length of the convolutional code.
+    generator (list): Generator polynomials in octal (list of strings).
+    """
+    self.constraint_length = constraint_length
+    self.generator = generator
+    self.memory = [0] * (constraint_length - 1)
+    self.encoded_data = []
+    # Convert octal generator polynomials to binary
+    self.binary_generator = [
+        [int(bit) for bit in bin(int(g, 8))[2:].zfill(constraint_length)]
+        for g in generator
+    ]
 
- # Convert octal generator polynomials to binary
- self.binary_generator = [
-            [int(bit) for bit in bin(int(g, 8))[2:].zfill(constraint_length)]
- for g in generator
- ]
 def encode_step(self, input_bit, listener=None):
     """
     Performs one step of the convolutional encoding process.
@@ -56,26 +56,12 @@ def encode_step(self, input_bit, listener=None):
     output = []
     involved_bits_for_step = []
 
-    for j, gen in enumerate(self.binary_generator):
-        output_bit = 0
-        involved_bits_for_generator = []
-        for k in range(self.constraint_length):
-            output_bit ^= input_with_memory[k] * gen[k]
-            if gen[k] == 1:
-                involved_bits_for_generator.append((input_with_memory[k], k))
-        output.append(output_bit)
+    for generator_index, generator_taps in enumerate(self.binary_generator):
+        generator_output_bit, involved_bits_for_generator = self._calculate_generator_output(
+            input_with_memory, generator_taps, listener
+        )
+        output.append(generator_output_bit)
         involved_bits_for_step.append(involved_bits_for_generator)
-
-        if listener:
-            # Report per generator for clarity
-            listener(
-                selected_bit=input_bit,
-                memory=self.memory[:],
-                input_with_memory=input_with_memory[:],
-                involved_bits=involved_bits_for_generator,
-                generator_output_bit=output_bit,
-                accumulated_encoded_data=self.encoded_data[:]
-            )
 
     self.encoded_data.extend(output)
 
@@ -83,6 +69,34 @@ def encode_step(self, input_bit, listener=None):
     self.memory = [input_bit] + self.memory[:-1]
     return output
 
+def _calculate_generator_output(self, input_with_memory, generator_taps, listener=None):
+    """
+    Calculates the output of a single generator for the current input and memory.
+
+        Args:
+            input_with_memory (list): The current input bit combined with memory.
+            generator_taps (list): The binary representation of the generator polynomial.
+            listener (function, optional): A function to call with step details (per generator).
+
+        Returns:
+            tuple: A tuple containing the output bit for this generator and a list of involved bits.
+        """
+    generator_output_bit = 0
+    involved_bits_for_generator = []
+    for position in range(self.constraint_length):
+        # XOR the product of the input bit at the current position and the generator tap
+        generator_output_bit ^= input_with_memory[position] * generator_taps[position]
+
+        # If the generator tap is 1, this bit is involved in the calculation
+        if generator_taps[position] == 1:
+            involved_bits_for_generator.append((input_with_memory[position], position))
+
+    if listener:
+        # Report per generator for clarity
+        # Note: This listener call is more suitable within the encode_step loop if needed per generator
+        pass # Re-evaluate where generator listener is most useful. Currently moved listener call to encode_step
+
+    return generator_output_bit, involved_bits_for_generator
 
 def get_encoded_data(self):
     return self.encoded_data
@@ -138,15 +152,6 @@ def convolutional_encoder(data, generator, constraint_length, listener=None):
 
 
 if __name__ == '__main__':
-    # # Example usage:
-    # data = [1, 0, 1, 1, 0, 0, 1] # Example 7-bit data
-    # constraint_length = 7
-    # generator = ["171", "133"]
-    # encoded = convolutional_encoder(data, generator, constraint_length)
-    # print(f"\nExample 1:")
-    # print(f"Original data: {data}, Constraint length: {constraint_length}, Generators: {generator}")
-    # print(f"Encoded data: {encoded}")
-
     def step_listener(selected_bit, memory, involved_bits, generator_output_bit, accumulated_encoded_data):
         print(f"  Step:")
         print(f"    Selected bit: {selected_bit}")
@@ -159,18 +164,7 @@ if __name__ == '__main__':
     data = [1, 0, 1, 1, 0, 0, 1] # Example 7-bit data
     constraint_length = 4
     generator = ["3", "5"]
-    encoded = convolutional_encoder(data, generator, constraint_length, listener=step_listener)
+    encoded = ConvolutionalEncoder(constraint_length, generator).encode_step(data, generator, constraint_length, listener=step_listener)
     print(f"\nExample 2 (with listener):")
     print(f"Original data: {data}, Constraint length: {constraint_length}, Generators: {generator}")
     print(f"Encoded data: {encoded}")
-
-    # Explanation of Generator Polynomials and Taps
-    # print("\n--- Generator Polynomials Explanation ---")
-    # print("Convolutional encoders use generator polynomials to define the connections (taps) from the shift register to the XOR gates that produce the output bits.")
-    # print("The constraint length (k) is the number of bits in the shift register that influence the output. This is the current input bit plus (k-1) memory bits.")
-    # print("We can represent the shift register conceptually as [Input_bit, Memory_bit_1, Memory_bit_2, ..., Memory_bit_(k-1)].")
-
-    # explain_generator_taps("171", 7)
-    # explain_generator_taps("133", 7)
-    # explain_generator_taps("3", 4)
-    # explain_generator_taps("5", 4)
