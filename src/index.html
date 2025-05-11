@@ -4,9 +4,79 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hello World</title>
+    <style>
+      #output {
+        margin-top: 20px;
+        border: 1px solid #ccc;
+        padding: 10px;
+        white-space: pre-wrap;
+      }
+    </style>
   </head>
 
   <body>
     <h1>Hello World</h1>
+
+    <div>
+      <label for="binaryMessage">Binary Message (0s and 1s separated by spaces):</label><br>
+      <input type="text" id="binaryMessage" size="50" placeholder="e.g., 0 1 0 0 1"><br><br>
+
+      <label for="generators">Generators (octal, separated by commas):</label><br>
+      <input type="text" id="generators" size="20" placeholder="e.g., 7, 5"><br><br>
+
+      <button id="setGeneratorButton">Set Generator and Initialize</button>
+    </div>
+
+    <div style="margin-top: 20px;">
+      <button id="nextStepButton" disabled>Next Step</button>
+    </div>
+
+    <div id="output">
+      Encoder Output and Messages will appear here.
+    </div>
+
+    <script>
+      const setGeneratorButton = document.getElementById('setGeneratorButton');
+      const nextStepButton = document.getElementById('nextStepButton');
+      const binaryMessageInput = document.getElementById('binaryMessage');
+      const generatorsInput = document.getElementById('generators');
+      const outputDiv = document.getElementById('output');
+
+      setGeneratorButton.addEventListener('click', async () => {
+        const binaryMessage = binaryMessageInput.value;
+        const generators = generatorsInput.value;
+
+        try {
+          const response = await fetch('/set_generator', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message: binaryMessage, generators: generators }),
+          });
+
+          const data = await response.json();
+          outputDiv.textContent = JSON.stringify(data, null, 2); // Display response nicely
+          if (response.ok) {
+            nextStepButton.disabled = false; // Enable next step button on success
+          }
+        } catch (error) {
+          outputDiv.textContent = 'Error setting generator: ' + error;
+        }
+      });
+
+      nextStepButton.addEventListener('click', async () => {
+        try {
+          const response = await fetch('/next_step', {
+            method: 'POST', // Use POST to trigger an action
+          });
+
+          const data = await response.json();
+          outputDiv.textContent += '\n' + JSON.stringify(data, null, 2); // Append response
+        } catch (error) {
+          outputDiv.textContent += '\nError getting next step: ' + error;
+        }
+      });
+    </script>
   </body>
 </html>
