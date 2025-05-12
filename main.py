@@ -12,11 +12,12 @@ message_to_encode = []
 encoder_messages = []
 message_index = 0 # To track the current bit being processed
 
-def encoder_listener(event_type, data):
+def encoder_listener(event_data):
     """Simple listener to collect encoder events."""
     global encoder_messages
-    encoder_messages.append({'event_type': event_type, 'data': data})
-    print(f"Encoder Event: {event_type}, Data: {data}") # For server-side debugging
+    event_type = event_data.get('type', 'UNKNOWN_EVENT')
+    encoder_messages.append({'event_type': event_type, 'data': event_data.get('data')})
+    print(f"Encoder Event: {event_type}, Data: {event_data.get('data')}") # For server-side debugging
 
 
 
