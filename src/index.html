@@ -1,82 +1,309 @@
+<!-- index.html (Modified) -->
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hello World</title>
+    <title>Convolutional Encoder Visualization</title>
     <style>
-      #output {
-        margin-top: 20px;
-        border: 1px solid #ccc;
-        padding: 10px;
-        white-space: pre-wrap;
-      }
+        body { font-family: sans-serif; margin: 20px; }
+        .container { display: flex; gap: 30px; }
+        .controls, .state, .step-output { border: 1px solid #ccc; padding: 15px; border-radius: 5px; }
+        .controls { width: 300px; }
+        .state { flex-grow: 1; }
+        .step-output { flex-grow: 2; margin-top: 20px; min-height: 200px; white-space: pre-wrap; background-color: #f9f9f9; }
+        h1, h2, h3 { margin-top: 0; }
+        label { display: block; margin-top: 10px; }
+        input[type="text"], input[type="number"] { width: 90%; padding: 8px; margin-top: 5px; }
+        button { padding: 10px 15px; margin-top: 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:disabled { background-color: #ccc; }
+        .error-message { color: red; font-weight: bold; }
+        #stepGeneratorCalculations div { margin-left: 20px; border-left: 2px solid #eee; padding-left: 10px; margin-bottom:10px;}
+        .mono { font-family: monospace; }
     </style>
-  </head>
+</head>
+<body>
+    <h1>Convolutional Encoder Step-by-Step</h1>
 
-  <body>
-    <h1>Hello World</h1>
+    <div class="container">
+        <div class="controls">
+            <h2>Setup</h2>
+            <div>
+                <label for="constraintLength">Constraint Length (K):</label>
+                <input type="number" id="constraintLength" value="3" min="2">
+            </div>
+            <div>
+                <label for="generators">Generators (octal, comma-separated):</label>
+                <input type="text" id="generators" placeholder="e.g., 7,5">
+            </div>
+            <div>
+                <label for="binaryMessage">Binary Message (0s and 1s, spaces optional):</label>
+                <input type="text" id="binaryMessage" placeholder="e.g., 1011">
+            </div>
+            <button id="setGeneratorButton">Initialize Encoder & Load Message</button>
+            <button id="nextStepButton" disabled>Next Encoding Step</button>
+            <p id="errorMessage" class="error-message"></p>
+        </div>
 
-    <div>
-      <label for="binaryMessage">Binary Message (0s and 1s separated by spaces):</label><br>
-      <input type="text" id="binaryMessage" size="50" placeholder="e.g., 0 1 0 0 1"><br><br>
-
-      <label for="generators">Generators (octal, separated by commas):</label><br>
-      <input type="text" id="generators" size="20" placeholder="e.g., 7, 5"><br><br>
-
-      <button id="setGeneratorButton">Set Generator and Initialize</button>
+        <div class="state">
+            <h2>Encoder Live State</h2>
+            <p>Constraint Length (K): <span id="stateK" class="mono">N/A</span></p>
+            <p>Generators (Octal): <span id="stateGeneratorsOctal" class="mono">N/A</span></p>
+            <p>Generators (Binary): <span id="stateGeneratorsBinary" class="mono">N/A</span></p>
+            <hr>
+            <p>Full Message (with padding): <span id="stateLoadedMessage" class="mono">N/A</span></p>
+            <p>Input Bit Pointer: <span id="stateMessagePointer" class="mono">0</span> / <span id="stateMessageLength" class="mono">0</span></p>
+            <p>Current Memory: <span id="stateMemory" class="mono">N/A</span></emdash><span id="stateMemoryLabels" class="mono"></span></p>
+            <p>Accumulated Output: <span id="stateAccumulatedOutput" class="mono">N/A</span></p>
+            <p>Encoding Complete: <span id="stateEncodingComplete" class="mono">No</span></p>
+        </div>
     </div>
 
-    <div style="margin-top: 20px;">
-      <button id="nextStepButton" disabled>Next Step</button>
+    <div class="step-output">
+        <h2>Last Step Details & Notifications</h2>
+        <div id="notifications"></div>
     </div>
 
-    <div id="output">
-      Encoder Output and Messages will appear here.
-    </div>
+<script>
+    const setGeneratorButton = document.getElementById('setGeneratorButton');
+    const nextStepButton = document.getElementById('nextStepButton');
+    const constraintLengthInput = document.getElementById('constraintLength');
+    const binaryMessageInput = document.getElementById('binaryMessage');
+    const generatorsInput = document.getElementById('generators');
+    const errorMessageDiv = document.getElementById('errorMessage');
+    const notificationsDiv = document.getElementById('notifications');
 
-    <script>
-      const setGeneratorButton = document.getElementById('setGeneratorButton');
-      const nextStepButton = document.getElementById('nextStepButton');
-      const binaryMessageInput = document.getElementById('binaryMessage');
-      const generatorsInput = document.getElementById('generators');
-      const outputDiv = document.getElementById('output');
+    // State Spans
+    const stateK = document.getElementById('stateK');
+    const stateGeneratorsOctal = document.getElementById('stateGeneratorsOctal');
+    const stateGeneratorsBinary = document.getElementById('stateGeneratorsBinary');
+    const stateLoadedMessage = document.getElementById('stateLoadedMessage');
+    const stateMessagePointer = document.getElementById('stateMessagePointer');
+    const stateMessageLength = document.getElementById('stateMessageLength');
+    const stateMemory = document.getElementById('stateMemory');
+    const stateMemoryLabels = document.getElementById('stateMemoryLabels');
+    const stateAccumulatedOutput = document.getElementById('stateAccumulatedOutput');
+    const stateEncodingComplete = document.getElementById('stateEncodingComplete');
 
-      setGeneratorButton.addEventListener('click', async () => {
-        const binaryMessage = binaryMessageInput.value;
-        const generators = generatorsInput.value;
+    let currentK = 0; // Store constraint length globally for UI helpers
+
+    function clearNotifications() {
+        notificationsDiv.innerHTML = '';
+        errorMessageDiv.textContent = '';
+    }
+
+    function showError(message) {
+        errorMessageDiv.textContent = message;
+        notificationsDiv.innerHTML = `<p class="error-message">Error: ${message}</p>`;
+    }
+    
+    function showNotification(message, type = 'info') {
+        const p = document.createElement('p');
+        p.textContent = message;
+        if (type === 'success') p.style.color = 'green';
+        notificationsDiv.prepend(p); // Add new notifications at the top
+    }
+
+    function formatMemory(memoryArray, kVal) {
+      const safeMemoryArray = memoryArray || []; // Ensure it's an array
+      if (safeMemoryArray.length === 0 && (kVal < 2 || !memoryArray) ) { // check original memoryArray for kVal < 2 case
+          return "[] (No memory cells)";
+      }
+      if (kVal < 2) return "[] (No memory cells)"; // K=1 means no memory cells
+
+      const labels = [];
+      for (let i = 0; i < kVal - 1; i++) {
+          // Ensure safeMemoryArray has enough elements, or show placeholder
+          labels.push(`M<sub>${i}</sub>=${safeMemoryArray[i] !== undefined ? safeMemoryArray[i] : '?'}`);
+      }
+      return `[${safeMemoryArray.join(', ')}] (${labels.join(', ')})`;
+    }
+    
+    function updateEncoderStateDisplay(config, liveState) {
+        if (config) {
+            currentK = config.constraint_length;
+            stateK.textContent = config.constraint_length;
+            stateGeneratorsOctal.textContent = (config.generators_octal || []).join(', ');
+            stateGeneratorsBinary.innerHTML = (config.binary_generators || []).join('<br>');
+            stateLoadedMessage.textContent = 'N/A'; // Will be updated by MESSAGE_LOADED event
+        }
+        if (liveState) {
+            stateMemory.innerHTML = formatMemory(liveState.memory, currentK);
+            stateAccumulatedOutput.textContent = (liveState.accumulated_output || []).length > 0 ? (liveState.accumulated_output || []).join('') : '[]';            stateMessagePointer.textContent = liveState.message_pointer;
+            stateMessageLength.textContent = liveState.message_length || 0;
+            stateEncodingComplete.textContent = liveState.is_complete ? 'Yes' : 'No';
+
+            if (liveState.is_complete) {
+                nextStepButton.disabled = true;
+            } else {
+                nextStepButton.disabled = false;
+            }
+        }
+    }
+    
+    function displayEventDetails(eventData) {
+        if (!eventData) return;
+
+        const eventDiv = document.createElement('div');
+        eventDiv.style.borderBottom = "1px dashed #ddd";
+        eventDiv.style.marginBottom = "10px";
+        eventDiv.style.paddingBottom = "10px";
+
+        let content = `<h3>Event: ${eventData.type}</h3>`;
+
+        switch (eventData.type) {
+            case "MESSAGE_LOADED":
+                content += `<p class="mono">Message: ${eventData.message_loaded.join('')} (Length: ${eventData.message_length})</p>`;
+                content += `<p class="mono">Message: ${(eventData.message_loaded || []).join('')} (Length: ${(eventData.message_loaded || []).length})</p>`;
+                stateLoadedMessage.textContent = (eventData.message_loaded || []).join('');stateMessageLength.textContent = eventData.message_length;
+                break;
+            case "ENCODE_STEP":
+                content += `<p><span class="mono">Input Bit: ${eventData.input_bit}</span></p>`;
+                content += `<p><span class="mono">Memory Before: ${formatMemory(eventData.memory_before, currentK)}</span></p>`;
+                content += `<p><span class="mono">Effective Register (Input, M<sub>0</sub>,...M<sub>K-2</sub>): [${(eventData.effective_register_contents || []).join(', ')}]</span></p>`;
+                content += `<h4>Generator Calculations:</h4><div id="stepGeneratorCalculations">`;
+                eventData.generators_details.forEach((gen, idx) => {
+                    content += `<div><strong>Generator ${idx + 1} ('${gen.generator_octal}' / '${gen.generator_binary}')</strong>`;
+                    let xorTerms = [];
+                    let xorDesc = [];
+                    if (gen.involved_source_bits && gen.involved_source_bits.length > 0) {
+                        gen.involved_source_bits.forEach(srcBit => {
+                            xorTerms.push(srcBit.value_tapped);
+                            xorDesc.push(`${srcBit.tap_description}=${srcBit.value_tapped}`);
+                        });
+                        content += `<p class="mono">  Taps: ${xorDesc.join('; ')}</p>`;
+                        content += `<p class="mono">  XOR Sum: ${xorTerms.join(' \u2295 ')} = ${gen.output_bit}</p>`;
+                    } else if (gen.generator_binary.includes('0') && !gen.generator_binary.includes('1')) { // All zero generator
+                         content += `<p class="mono">  XOR Sum: 0 (generator polynomial is zero)</p>`;
+                    }
+                    else {
+                        content += `<p class="mono">  XOR Sum: 0 (no active taps for this input/memory state or generator is all zeros)</p>`;
+                    }
+                    content += `<p class="mono">  Output Bit: ${gen.output_bit}</p></div>`;
+                });
+                content += `</div>`; // End stepGeneratorCalculations
+                content += `<p><span class="mono">Output for this step: [${(eventData.output_bits_for_step || []).join(', ')}]</span></p>`;
+                content += `<p><span class="mono">Memory After: ${formatMemory(eventData.memory_after, currentK)}</span></p>`;
+                content += `<p class="mono">Accumulated Output (before this step): ${(eventData.accumulated_encoded_data_before_step || []).join('') || '[]'}</p>`;
+                break;
+            case "ENCODING_COMPLETE":
+                content += `<p class="mono">Original Message Processed (incl. padding): ${(eventData.message_processed || []).join('')}</p>`;
+                content += `<p class="mono">Full Encoded Output: ${(eventData.full_encoded_output || []).join('')}</p>`;
+                showNotification("Encoding for the current message is complete!", "success");
+                break;
+            case "ENCODER_RESET":
+                content += `<p>Status: ${eventData.status}</p>`;
+                break;
+            default:
+                content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
+        }
+        eventDiv.innerHTML = content;
+        notificationsDiv.prepend(eventDiv);
+    }
+
+    setGeneratorButton.addEventListener('click', async () => {
+        clearNotifications();
+        const kVal = constraintLengthInput.value;
+        const gens = generatorsInput.value;
+        const msg = binaryMessageInput.value;
+
+        if (!kVal || parseInt(kVal) < 2) {
+            showError("Constraint Length (K) must be an integer >= 2.");
+            return;
+        }
+        if (!gens.trim()) {
+            showError("Generators must be provided.");
+            return;
+        }
+        // Message can be empty, encoder handles it.
 
         try {
-          const response = await fetch('/set_generator', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: binaryMessage, generators: generators }),
-          });
+            const response = await fetch('/set_generator', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    constraint_length: parseInt(kVal),
+                    generators: gens,
+                    message: msg
+                }),
+            });
 
-          const data = await response.json();
-          outputDiv.textContent = JSON.stringify(data, null, 2); // Display response nicely
-          if (response.ok) {
-            nextStepButton.disabled = false; // Enable next step button on success
-          }
+            const data = await response.json();
+            if (!response.ok) {
+                showError(data.message || `Error: ${response.status}`);
+                nextStepButton.disabled = true;
+                return;
+            }
+            
+            showNotification(data.message, "success");
+            updateEncoderStateDisplay(data.config, null); // Update K, Generators display
+
+            if (data.initial_event) {
+                displayEventDetails(data.initial_event); // Display MESSAGE_LOADED event
+            }
+            // Initial state update for memory, pointer etc. (usually all zeros at start)
+            // The server now sends full encoder state after each step, so we can rely on that for subsequent updates.
+            // For the very first load, we can use some defaults or wait for the first next_step.
+            // Let's assume the initial state for memory and pointer is 0/empty.
+            // The initial MESSAGE_LOADED event will give message length.
+            // The `config` part of response has `padded_message_length`.
+            updateEncoderStateDisplay(null, {
+                 memory: Array(parseInt(kVal)-1).fill(0), // Initial memory is zeros
+                 accumulated_output: [],
+                 message_pointer: 0,
+                 message_length: data.config.padded_message_length,
+                 is_complete: data.config.padded_message_length === 0 // Complete if message is empty
+            });
+
+
+            nextStepButton.disabled = (data.config.padded_message_length === 0);
+
         } catch (error) {
-          outputDiv.textContent = 'Error setting generator: ' + error;
+            showError('Network or client-side error: ' + error.message);
+            nextStepButton.disabled = true;
         }
-      });
+    });
 
-      nextStepButton.addEventListener('click', async () => {
+    nextStepButton.addEventListener('click', async () => {
+        clearNotifications(); // Clear only general error, keep event log
+        errorMessageDiv.textContent = ''; // Clear specific error message div
         try {
-          const response = await fetch('/next_step', {
-            method: 'POST', // Use POST to trigger an action
-          });
+            const response = await fetch('/next_step', {
+                method: 'POST',
+            });
+            const data = await response.json();
 
-          const data = await response.json();
-          outputDiv.textContent += '\n' + JSON.stringify(data, null, 2); // Append response
+            if (!response.ok) {
+                showError(data.message || `Error: ${response.status}`);
+                return;
+            }
+            
+            if (data.details_from_method) {
+                 showNotification(`Status: ${data.status_from_method} - ${data.details_from_method}`);
+            }
+
+            if (data.primary_event) {
+                displayEventDetails(data.primary_event);
+            }
+            
+            if (data.encoder_state_after_step) {
+                updateEncoderStateDisplay(null, data.encoder_state_after_step);
+            }
+
+            if (data.status_from_method === "already_complete" || data.status_from_method === "encoding_complete") {
+                nextStepButton.disabled = true;
+            }
+
         } catch (error) {
-          outputDiv.textContent += '\nError getting next step: ' + error;
+            showError('Network or client-side error: ' + error.message);
         }
-      });
-    </script>
-  </body>
+    });
+
+    // Initial UI state
+    updateEncoderStateDisplay(null, {
+        memory: [], accumulated_output: [], message_pointer: 0, message_length: 0, is_complete: false
+    });
+
+</script>
+</body>
 </html>

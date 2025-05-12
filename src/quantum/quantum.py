@@ -1,4 +1,4 @@
-from helpers import explain_generator_taps
+from src.quantum.helpers import explain_generator_taps
 class ConvolutionalEncoder:
     """
     Convolutional encoder class.
@@ -318,4 +318,3 @@ if __name__ == '__main__':
     print(f"\nFinal Encoded Output (from step-by-step): {final_encoded_output_stepwise}")
     print(f"Expected Output                           : {expected_output}")
     assert final_encoded_output_stepwise == expected_output, "Step-by-step output mismatch!"
-    
