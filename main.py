@@ -3,8 +3,9 @@ import json
 
 from flask import Flask, send_file, request, jsonify
 
-from src.quantum.quantum import ConvolutionalEncoder
+from src.quantum.quantum_encoder import ConvolutionalEncoder
 from src.quantum.helpers import explain_generator_taps
+
 app = Flask(__name__)
 
 encoder = None
