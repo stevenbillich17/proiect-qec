@@ -1,4 +1,4 @@
-from src.quantum.helpers import explain_generator_taps
+from helpers import explain_generator_taps
 class ConvolutionalEncoder:
     """
     Convolutional encoder class.
@@ -229,12 +229,9 @@ class ConvolutionalEncoder:
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    print("===== Encoder Setup Explanation =====")
+    #print("===== Encoder Setup Explanation =====")
     target_constraint_length = 3  # K=3
     target_generators_octal = ["7", "5"] # G1=111, G2=101
-    
-    explain_generator_taps(target_generators_octal[0], target_constraint_length)
-    explain_generator_taps(target_generators_octal[1], target_constraint_length)
 
     print("\n===== Step-by-Step Encoding with Listener (Class-based) =====")
     encoder = ConvolutionalEncoder(constraint_length=target_constraint_length, 
