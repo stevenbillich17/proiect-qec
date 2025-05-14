@@ -4,7 +4,7 @@ This application implements a simple convolutional encoder and Viterbi decoder u
 
 ## Screenshot
 
-![App Screenshot](ScreenShotApp.png)
+![App Screenshot](ScreenShotApp.PNG)
 
 ## Features
 
