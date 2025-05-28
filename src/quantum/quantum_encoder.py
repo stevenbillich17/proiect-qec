@@ -1,11 +1,8 @@
-from src.quantum.helpers import explain_generator_taps
-class ConvolutionalEncoder:
-    """
-    Convolutional encoder class.
-    Configurable for constraint length and generator polynomials.
-    Supports listeners for step-by-step encoding details and message lifecycle events.
-    """
+# src/quantum/quantum_encoder.py
+# from src.quantum.helpers import explain_generator_taps # Assuming this exists
+from src.quantum.puncturer import Puncturer, PREDEFINED_PUNCTURING_SCHEMES # Import Puncturer
 
+class ConvolutionalEncoder:
     def __init__(self, constraint_length, generators_octal):
         if not isinstance(constraint_length, int) or constraint_length < 1:
             raise ValueError("Constraint length (K) must be a positive integer.")
@@ -22,81 +19,123 @@ class ConvolutionalEncoder:
             ]
         except ValueError:
             raise ValueError("Invalid octal string found in generators.")
+        
+        self.num_output_streams = len(self.binary_generators) # e.g., 2 for rate 1/2 base
 
         self.memory_size = self.constraint_length - 1
         self.listeners = []
-        self._reset_encoding_state() # Initialize memory, buffer, and message state
+        self.puncturer = None # Initialize puncturer as None
+        self._reset_encoding_state()
 
     def _reset_encoding_state(self):
-        """
-        Resets memory, encoded data buffer, and current message tracking state.
-        Called during full reset or when a new message is loaded.
-        """
         self.memory = [0] * self.memory_size
         self.encoded_data_buffer = [] 
+        self.unpunctured_data_for_current_message = [] # To store all unpunctured pairs
         self.current_message = []
         self.current_message_bit_idx = 0 
         self.is_message_loaded = False
         self.is_encoding_complete_for_current_message = False
+        if self.puncturer:
+            self.puncturer.reset_period_tracker() # Reset puncturer's internal state too
 
     def reset(self):
-        """
-        Performs a full reset of the encoder.
-        Clears memory, encoded data buffer, any loaded message, and resets message progress.
-        Encoder configuration (K, G) and listeners are preserved.
-        """
         self._reset_encoding_state()
+        # self.puncturer remains as is, or could be reset to None by a separate clear_puncturer call
         self._notify_listeners({
             "type": "ENCODER_RESET",
             "status": "Full encoder state reset (memory, buffer, message progress)."
         })
 
-    def add_listener(self, listener):
+    def set_puncturer(self, puncturing_scheme_key=None, custom_matrix=None, custom_label="Custom"):
+        """
+        Sets or clears the puncturer for the encoder.
+        Args:
+            puncturing_scheme_key (str, optional): Key from PREDEFINED_PUNCTURING_SCHEMES.
+                                                   If "NONE" or None, puncturer is cleared.
+            custom_matrix (list of lists, optional): A custom puncturing matrix.
+                                                     Ignored if puncturing_scheme_key is valid.
+            custom_label (str, optional): Label for custom matrix.
+        """
+        old_puncturer_info = self.puncturer.get_info() if self.puncturer else None
+        
+        if puncturing_scheme_key and puncturing_scheme_key.upper() != "NONE" and puncturing_scheme_key in PREDEFINED_PUNCTURING_SCHEMES:
+            scheme = PREDEFINED_PUNCTURING_SCHEMES[puncturing_scheme_key]
+            if scheme["mother_code_output_streams"] != self.num_output_streams:
+                raise ValueError(
+                    f"Puncturing scheme '{scheme['label']}' expects {scheme['mother_code_output_streams']} "
+                    f"mother code streams, but encoder has {self.num_output_streams}."
+                )
+            self.puncturer = Puncturer(scheme["matrix"], scheme["label"])
+        elif custom_matrix:
+            # Basic validation for custom_matrix compatibility
+            if len(custom_matrix) != self.num_output_streams:
+                 raise ValueError(
+                    f"Custom puncturing matrix rows ({len(custom_matrix)}) "
+                    f"must match encoder output streams ({self.num_output_streams})."
+                )
+            self.puncturer = Puncturer(custom_matrix, custom_label)
+        else: # Clear puncturer
+            self.puncturer = None
+        
+        if self.puncturer:
+            self.puncturer.reset_period_tracker()
+
+        new_puncturer_info = self.puncturer.get_info() if self.puncturer else None
+        
+        # Notify only if there's a change in puncturing status or configuration
+        if (old_puncturer_info is None and new_puncturer_info is not None) or \
+           (old_puncturer_info is not None and new_puncturer_info is None) or \
+           (old_puncturer_info and new_puncturer_info and old_puncturer_info["matrix"] != new_puncturer_info["matrix"]):
+            self._notify_listeners({
+                "type": "PUNCTURER_CONFIG_CHANGED",
+                "active": bool(self.puncturer),
+                "scheme_label": self.puncturer.rate_label if self.puncturer else "None",
+                "puncturing_matrix": self.puncturer.puncturing_matrix if self.puncturer else None
+            })
+        return self.puncturer.get_info() if self.puncturer else None
+
+
+    def add_listener(self, listener): # Unchanged
         if not callable(listener):
             raise ValueError("Listener must be a callable function or method.")
         if listener not in self.listeners:
             self.listeners.append(listener)
 
-    def remove_listener(self, listener):
+    def remove_listener(self, listener): # Unchanged
         try:
             self.listeners.remove(listener)
         except ValueError:
             pass 
 
-    def _notify_listeners(self, event_data):
+    def _notify_listeners(self, event_data): # Unchanged
         for listener in self.listeners:
             listener(event_data)
 
-    def load_message(self, message_bits):
-        """
-        Loads a new message for step-by-step or batch encoding.
-        This operation will reset the encoder's memory, clear any previous
-        encoded data buffer, and set up the new message for processing.
-        Args:
-            message_bits (list): A list of bits (0s or 1s) for the new message.
-        """
+    def load_message(self, message_bits): # Unchanged in core logic, _reset_encoding_state handles puncturer period
         if not isinstance(message_bits, list) or not all(bit in [0,1] for bit in message_bits):
             raise ValueError("Message bits must be a list of 0s or 1s.")
         
-        self._reset_encoding_state() # Ensures a clean start for the new message
+        self._reset_encoding_state() 
 
-        self.current_message = list(message_bits) # Store a copy
+        self.current_message = list(message_bits)
         self.is_message_loaded = True
+        self.unpunctured_data_for_current_message = [] # Reset for new message
         
         event_data = {
             "type": "MESSAGE_LOADED",
             "message_loaded": list(self.current_message),
             "message_length": len(self.current_message)
         }
-        if not self.current_message: # Empty message
-            self.is_encoding_complete_for_current_message = True # Considered complete
+        # ... rest of load_message is the same ...
+        if not self.current_message:
+            self.is_encoding_complete_for_current_message = True
             event_data["status"] = "Empty message loaded; encoding considered complete."
         else:
             event_data["status"] = "Message loaded; ready for encoding."
-        
         self._notify_listeners(event_data)
 
-    def _calculate_generator_output(self, effective_register_contents, generator_taps_binary):
+
+    def _calculate_generator_output(self, effective_register_contents, generator_taps_binary): # Unchanged
         output_bit = 0
         involved_source_bits_details = []
         for i in range(self.constraint_length):
@@ -112,21 +151,14 @@ class ConvolutionalEncoder:
                 })
         return output_bit, involved_source_bits_details
 
-    def encode_bit(self, input_bit):
+    def _encode_single_input_bit_raw(self, input_bit):
         """
-        Encodes a single input bit. Internal method used by go_to_next_step or direct stream processing.
-        Updates memory, generates output bits for this step, appends to buffer, and notifies listeners.
-        Args:
-            input_bit (int): The current input bit (0 or 1).
-        Returns:
-            list: The output bits (one for each generator) generated for this input_bit.
+        Performs raw encoding for one bit, returning unpunctured output and details.
+        This is the core encoding logic before puncturing.
         """
-        if input_bit not in [0, 1]:
-            raise ValueError("Input bit must be 0 or 1.")
-
         memory_before_update = list(self.memory) 
         effective_register_contents = [input_bit] + self.memory
-        current_step_output_bits = []
+        unpunctured_output_for_step = []
         per_generator_calculation_details = []
 
         for g_idx, gen_taps_binary in enumerate(self.binary_generators):
@@ -134,7 +166,7 @@ class ConvolutionalEncoder:
             output_for_this_gen, involved_bits = self._calculate_generator_output(
                 effective_register_contents, gen_taps_binary
             )
-            current_step_output_bits.append(output_for_this_gen)
+            unpunctured_output_for_step.append(output_for_this_gen)
             per_generator_calculation_details.append({
                 "generator_octal": gen_octal_str,
                 "generator_binary": ''.join(map(str, gen_taps_binary)),
@@ -145,27 +177,55 @@ class ConvolutionalEncoder:
         if self.memory_size > 0:
             self.memory = [input_bit] + self.memory[:-1]
         memory_after_update = list(self.memory)
+        
+        return (unpunctured_output_for_step, memory_before_update, 
+                effective_register_contents, per_generator_calculation_details, memory_after_update)
+
+    def encode_bit(self, input_bit):
+        """
+        Encodes a single input bit, applies puncturing if active, and notifies listeners.
+        Args:
+            input_bit (int): The current input bit (0 or 1).
+        Returns:
+            list: The *punctured* output bits generated for this input_bit.
+        """
+        if input_bit not in [0, 1]:
+            raise ValueError("Input bit must be 0 or 1.")
+
+        (unpunctured_bits, mem_before, eff_reg, 
+         gen_details, mem_after) = self._encode_single_input_bit_raw(input_bit)
+        
+        self.unpunctured_data_for_current_message.append(list(unpunctured_bits)) # Store unpunctured pair
+
+        punctured_bits_for_step = []
+        if self.puncturer:
+            punctured_bits_for_step = self.puncturer.puncture_symbol(unpunctured_bits)
+        else:
+            punctured_bits_for_step = list(unpunctured_bits) # No puncturing, keep all
 
         event_data = {
             "type": "ENCODE_STEP",
             "input_bit": input_bit,
-            "memory_before": memory_before_update,
-            "effective_register_contents": effective_register_contents,
-            "generators_details": per_generator_calculation_details,
-            "output_bits_for_step": list(current_step_output_bits), 
-            "memory_after": memory_after_update,
-            "accumulated_encoded_data_total": list(self.encoded_data_buffer)
+            "memory_before": mem_before,
+            "effective_register_contents": eff_reg,
+            "generators_details": gen_details, # Details of unpunctured calculation
+            "unpunctured_output_for_step": list(unpunctured_bits), # Explicitly add unpunctured
+            "punctured_output_for_step": list(punctured_bits_for_step),
+            "output_bits_for_step": list(punctured_bits_for_step), # For backward compatibility if something expects this key
+            "memory_after": mem_after,
+            "is_puncturing_active": bool(self.puncturer),
+            "puncturer_period_index_before_step": self.puncturer.current_period_index -1 if self.puncturer else -1, # Index used for this step
+            "accumulated_encoded_data_total": list(self.encoded_data_buffer) # Before this step's output added
         }
-        self._notify_listeners(event_data)
-        self.encoded_data_buffer.extend(current_step_output_bits)
-        return current_step_output_bits
+        if self.puncturer and event_data["puncturer_period_index_before_step"] < 0 : # Correct for wrap around
+             event_data["puncturer_period_index_before_step"] = self.puncturer.period -1
 
-    def go_to_next_step(self):
-        """
-        Processes the next bit of the loaded message.
-        Returns:
-            dict: {'status': str, 'output_bits': list or None, 'details': str or None}
-        """
+
+        self._notify_listeners(event_data)
+        self.encoded_data_buffer.extend(punctured_bits_for_step) # Add punctured bits to main buffer
+        return punctured_bits_for_step
+
+    def go_to_next_step(self): # Logic remains largely the same, calls the new encode_bit
         if not self.is_message_loaded:
             return {"status": "no_message_loaded", "output_bits": None, "details": "No message loaded. Call load_message() first."}
         if self.is_encoding_complete_for_current_message:
@@ -173,7 +233,8 @@ class ConvolutionalEncoder:
 
         if self.current_message_bit_idx < len(self.current_message):
             input_bit = self.current_message[self.current_message_bit_idx]
-            output_bits_for_step = self.encode_bit(input_bit)
+            # 'encode_bit' now handles puncturing internally and returns punctured bits
+            output_bits_for_step = self.encode_bit(input_bit) 
             self.current_message_bit_idx += 1
 
             if self.current_message_bit_idx == len(self.current_message):
@@ -181,28 +242,29 @@ class ConvolutionalEncoder:
                 self._notify_listeners({
                     "type": "ENCODING_COMPLETE",
                     "message_processed": list(self.current_message),
-                    "full_encoded_output": list(self.encoded_data_buffer)
+                    "full_encoded_output": list(self.encoded_data_buffer), # This is now the punctured output
+                    "full_unpunctured_output_pairs": list(self.unpunctured_data_for_current_message), # Store all raw pairs
+                    "is_puncturing_active": bool(self.puncturer),
+                    "puncturing_details": self.puncturer.get_info() if self.puncturer else None
                 })
                 return {"status": "encoding_complete", "output_bits": output_bits_for_step, "details": f"Processed bit {self.current_message_bit_idx}/{len(self.current_message)}. Encoding complete."}
             else:
                 return {"status": "step_processed", "output_bits": output_bits_for_step, "details": f"Processed bit {self.current_message_bit_idx}/{len(self.current_message)}."}
-        else: # Should be caught by is_encoding_complete flag, but as safeguard
+        else: 
             self.is_encoding_complete_for_current_message = True
             return {"status": "already_complete", "output_bits": None, "details": "Internal: Index out of bounds but not marked complete."}
 
-    def encode(self, message_bits):
+    def encode(self, message_bits, puncturing_scheme_key=None, custom_matrix=None): # Allow setting puncturer during batch encode
         """
         Encodes a sequence of message bits (batch processing).
-        This loads the message (which resets internal state including memory)
-        and processes it fully.
-        Args:
-            message_bits (list): A list of bits (0s or 1s) to encode.
-        Returns:
-            list: The complete encoded sequence for the given message bits.
+        Optionally sets a puncturer for this encoding run.
         """
+        if puncturing_scheme_key or custom_matrix: # If puncturing provided for this batch call
+            self.set_puncturer(puncturing_scheme_key, custom_matrix)
+        
         self.load_message(message_bits) 
 
-        if not self.current_message: # Empty message handled by load_message
+        if not self.current_message:
             return list(self.get_current_encoded_data())
 
         while not self.is_current_message_fully_encoded():
@@ -212,8 +274,12 @@ class ConvolutionalEncoder:
             
         return list(self.get_current_encoded_data())
 
-    def get_current_encoded_data(self):
+    # Getters remain mostly the same
+    def get_current_encoded_data(self): # This now returns (potentially) punctured data
         return list(self.encoded_data_buffer)
+
+    def get_current_unpunctured_data_pairs(self): # New getter for UI or analysis
+        return list(self.unpunctured_data_for_current_message)
 
     def get_current_memory(self):
         return list(self.memory)
@@ -226,92 +292,62 @@ class ConvolutionalEncoder:
 
     def is_current_message_fully_encoded(self):
         return self.is_encoding_complete_for_current_message
+    
+    def get_puncturer_info(self):
+        return self.puncturer.get_info() if self.puncturer else None
 
-# --- Main Execution ---
+# --- Main Execution (Example update) ---
 if __name__ == '__main__':
-    #print("===== Encoder Setup Explanation =====")
-    target_constraint_length = 3  # K=3
-    target_generators_octal = ["7", "5"] # G1=111, G2=101
+    target_constraint_length = 7 
+    target_generators_octal = ["171", "133"] 
 
-    print("\n===== Step-by-Step Encoding with Listener (Class-based) =====")
     encoder = ConvolutionalEncoder(constraint_length=target_constraint_length, 
                                    generators_octal=target_generators_octal)
+    # ... (listener setup can be similar, but now check for puncturing fields in event_data) ...
+    
+    def simple_listener(event_data):
+        print(f"Event: {event_data['type']}")
+        if event_data['type'] == 'ENCODE_STEP':
+            print(f"  Input: {event_data['input_bit']}")
+            print(f"  Unpunctured: {event_data['unpunctured_output_for_step']}")
+            if event_data['is_puncturing_active']:
+                print(f"  Punctured  : {event_data['punctured_output_for_step']} (idx {event_data['puncturer_period_index_before_step']})")
+            print(f"  Mem After: {event_data['memory_after']}")
+        elif event_data['type'] == 'ENCODING_COMPLETE':
+            print(f"  Final Punctured Output: {event_data['full_encoded_output']}")
+            if event_data['is_puncturing_active']:
+                 print(f"  Puncturing Details: {event_data['puncturing_details']}")
+        elif event_data['type'] == 'PUNCTURER_CONFIG_CHANGED':
+            print(f"  Puncturer Active: {event_data['active']}, Label: {event_data['scheme_label']}")
 
-    def comprehensive_listener(event_data):
-        event_type = event_data.get("type", "UNKNOWN_EVENT")
-        print(f"\n🔔 LISTENER NOTIFICATION ({event_type}) 🔔")
 
-        if event_type == "ENCODE_STEP":
-            print(f"  Input Bit              : {event_data['input_bit']}")
-            # Determine M_K-2 string for memory display
-            mem_labels = []
-            if target_constraint_length > 1: # encoder.constraint_length can be used too
-                 mem_labels = [f"M_{i}" for i in range(target_constraint_length - 2, -1, -1)] # M_K-2 ... M_0
-            
-            mem_str = "N/A"
-            if mem_labels: # If there's memory
-                mem_str = str(event_data['memory_before']) + " (" + ' '.join(mem_labels) + ")"
-            else: # No memory elements (K=1)
-                mem_str = "[] (No memory elements for K=1)"
+    encoder.add_listener(simple_listener)
+    message_to_encode = [1,0,1,1,0] # 5 bits
 
-            print(f"  Memory (Before)        : {mem_str}")
-            print(f"  Effective Register     : {event_data['effective_register_contents']} ([Input, M_0,...M_{target_constraint_length-2}])")
-            
-            print("  Generator Calculations:")
-            for i, gen_detail in enumerate(event_data['generators_details']):
-                print(f"    Generator {i+1} ('{gen_detail['generator_octal']}' / '{gen_detail['generator_binary']}'):")
-                tapped_values_for_xor = [str(item['value_tapped']) for item in gen_detail['involved_source_bits']]
-                xor_sum_str = " XOR ".join(tapped_values_for_xor) if tapped_values_for_xor else "0"
-                if not gen_detail['involved_source_bits'] and gen_detail['generator_binary'].count('1') == 0 :
-                     xor_sum_str = "0 (generator polynomial is zero)"
-                print(f"      XOR Sum              : {xor_sum_str}")
-                print(f"      Output Bit           : {gen_detail['output_bit']}")
-                
-            print(f"  Output for this step   : {event_data['output_bits_for_step']}")
-            mem_after_str = "N/A"
-            if mem_labels:
-                 mem_after_str = str(event_data['memory_after']) + " (" + ' '.join(mem_labels) + ")"
-            else:
-                 mem_after_str = "[] (No memory elements for K=1)"
-            print(f"  Memory (After)         : {mem_after_str}")
-            print(f"  Accumulated Encoded    : {event_data['accumulated_encoded_data_total']} (before this step's output)")
-        
-        elif event_type == "MESSAGE_LOADED":
-            print(f"  Message Loaded         : {event_data['message_loaded']}")
-            print(f"  Length                 : {event_data['message_length']}")
-            print(f"  Status                 : {event_data['status']}")
-        
-        elif event_type == "ENCODING_COMPLETE":
-            print(f"  Original Message       : {event_data['message_processed']}")
-            print(f"  Full Encoded Output    : {event_data['full_encoded_output']}")
-            print(f"  Status                 : Encoding for the current message is complete.")
-        
-        elif event_type == "ENCODER_RESET":
-            print(f"  Status                 : {event_data['status']}")
-        
-        else:
-            print(f"  Raw Event Data         : {event_data}")
-        print(f"🔔 --- End Notification --- 🔔")
-
-    encoder.add_listener(comprehensive_listener)
-
-    message_to_encode = [1, 0, 1, 1, 0, 0] # Example message with K-1 flush bits for K=3
-    expected_output = [1,1, 1,0, 0,0, 0,1, 0,1, 1,1] # For K=3, G=["7","5"], M=101100
-
-    print(f"\nLoading message for step-by-step encoding: {message_to_encode}")
-    encoder.load_message(message_to_encode)
-
-    step_count = 0
+    print("\n--- Encoding WITHOUT Puncturing ---")
+    encoder.set_puncturer("NONE") # Or encoder.set_puncturer()
+    encoder.load_message(list(message_to_encode))
     while not encoder.is_current_message_fully_encoded():
-        step_count += 1
-        print(f"\n>>> Calling go_to_next_step() - Step {step_count} of {len(message_to_encode)} <<<")
-        step_info = encoder.go_to_next_step()
-        print(f">>> go_to_next_step() call returned status: '{step_info['status']}'")
-        if step_info['output_bits'] is not None:
-            print(f"    Output for this step (from return): {step_info['output_bits']}")
-        # Listener will print more details if ENCODE_STEP or ENCODING_COMPLETE was triggered
+        encoder.go_to_next_step()
+    print(f"Final (unpunctured) output: {encoder.get_current_encoded_data()}")
 
-    final_encoded_output_stepwise = encoder.get_current_encoded_data()
-    print(f"\nFinal Encoded Output (from step-by-step): {final_encoded_output_stepwise}")
-    print(f"Expected Output                           : {expected_output}")
-    assert final_encoded_output_stepwise == expected_output, "Step-by-step output mismatch!"
+
+    print("\n--- Encoding WITH Rate 2/3 Puncturing ---")
+    encoder.set_puncturer("2/3")
+    encoder.load_message(list(message_to_encode)) # Reload message to reset state
+    while not encoder.is_current_message_fully_encoded():
+        encoder.go_to_next_step()
+    final_punctured_output = encoder.get_current_encoded_data()
+    print(f"Final (2/3 punctured) output: {final_punctured_output}")
+    # Expected for Rate 2/3 (Matrix: [[1,0],[1,1]], Period 2, 3 ones) for 5 input bits:
+    # Input 1 -> Unp (v1a,v2a) -> Punc [v1a, v2a] (idx 0 of matrix [[1],[1]])
+    # Input 0 -> Unp (v1b,v2b) -> Punc [v2b]       (idx 1 of matrix [[0],[1]])
+    # Input 1 -> Unp (v1c,v2c) -> Punc [v1c, v2c] (idx 0 of matrix [[1],[1]])
+    # Input 1 -> Unp (v1d,v2d) -> Punc [v2d]       (idx 1 of matrix [[0],[1]])
+    # Input 0 -> Unp (v1e,v2e) -> Punc [v1e, v2e] (idx 0 of matrix [[1],[1]])
+    # Total output bits = 2+1+2+1+2 = 8 bits. If message was 4 bits, output is 2+1+2+1 = 6 bits.
+
+    # Example using batch encode with puncturing
+    print("\n--- Batch Encoding WITH Rate 4/5 Puncturing ---")
+    batch_output = encoder.encode(list(message_to_encode), puncturing_scheme_key="4/5")
+    print(f"Final (4/5 punctured) output from batch: {batch_output}")
