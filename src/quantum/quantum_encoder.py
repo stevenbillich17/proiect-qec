@@ -1,4 +1,4 @@
-from helpers import explain_generator_taps
+from src.quantum.helpers import explain_generator_taps
 class ConvolutionalEncoder:
     """
     Convolutional encoder class.

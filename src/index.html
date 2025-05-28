@@ -1,70 +1,164 @@
-<!-- index.html (Modified) -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Convolutional Encoder Visualization</title>
+    <title>Convolutional Coder Visualization</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .container { display: flex; gap: 30px; }
-        .controls, .state, .step-output { border: 1px solid #ccc; padding: 15px; border-radius: 5px; }
-        .controls { width: 300px; }
-        .state { flex-grow: 1; }
-        .step-output { flex-grow: 2; margin-top: 20px; min-height: 200px; white-space: pre-wrap; background-color: #f9f9f9; }
-        h1, h2, h3 { margin-top: 0; }
-        label { display: block; margin-top: 10px; }
-        input[type="text"], input[type="number"] { width: 90%; padding: 8px; margin-top: 5px; }
-        button { padding: 10px 15px; margin-top: 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:disabled { background-color: #ccc; }
-        .error-message { color: red; font-weight: bold; }
-        #stepGeneratorCalculations div { margin-left: 20px; border-left: 2px solid #eee; padding-left: 10px; margin-bottom:10px;}
-        .mono { font-family: monospace; }
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .tab-container { display: flex; margin-bottom: 10px; border-bottom: 1px solid #ccc; }
+        .tab-button { padding: 10px 20px; cursor: pointer; border: none; background-color: transparent; font-size: 16px; border-bottom: 3px solid transparent; }
+        .tab-button.active { border-bottom: 3px solid #007bff; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .container { display: flex; gap: 20px; flex-wrap: wrap; }
+        .controls, .state, .decoder-state-display { border: 1px solid #ccc; padding: 15px; border-radius: 5px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.05); margin-bottom: 20px;}
+        .controls { width: 100%; max-width: 350px; }
+        .state, .decoder-state-display { flex-grow: 1; min-width: 300px; }
+        .step-output, .decoder-step-output { flex-basis: 100%; margin-top: 10px; min-height: 150px; white-space: pre-wrap; background-color: #f9f9f9; border: 1px solid #ddd; padding:10px; border-radius: 5px; max-height: 400px; overflow-y: auto;}
+        
+        h1, h2, h3 { margin-top: 0; color: #333; }
+        h3 { font-size: 1.1em; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom:10px; }
+        label { display: block; margin-top: 10px; font-weight: bold; color: #555; }
+        input[type="text"], input[type="number"], textarea { width: calc(100% - 18px); padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
+        textarea { min-height: 60px; }
+        button { padding: 10px 15px; margin-top: 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .error-message { color: red; font-weight: bold; margin-top:10px; }
+        #stepGeneratorCalculations div, .decoder-event-detail div { margin-left: 15px; border-left: 2px solid #eee; padding-left: 10px; margin-bottom:8px;}
+        .mono { font-family: "Courier New", Courier, monospace; background-color: #eef; padding: 2px 4px; border-radius: 3px; }
+        .event-log-entry { border-bottom: 1px dashed #ddd; padding-bottom: 10px; margin-bottom: 10px; }
+        .event-log-entry:last-child { border-bottom: none; }
+        .flex-row { display: flex; align-items: center; gap: 10px; }
+        .flex-row input[type="checkbox"] { margin-top: 0; }
     </style>
 </head>
 <body>
-    <h1>Convolutional Encoder Step-by-Step</h1>
+    <h1>Convolutional Coder Step-by-Step Visualization</h1>
 
-    <div class="container">
-        <div class="controls">
-            <h2>Setup</h2>
-            <div>
-                <label for="constraintLength">Constraint Length (K):</label>
-                <input type="number" id="constraintLength" value="3" min="2">
+    <div class="tab-container">
+        <button class="tab-button active" onclick="openTab(event, 'encoderTab')">Encoder</button>
+        <button class="tab-button" onclick="openTab(event, 'decoderTab')">Viterbi Decoder (K=7, G=171,133)</button>
+    </div>
+
+    <!-- Encoder Tab -->
+    <div id="encoderTab" class="tab-content active">
+        <div class="container">
+            <div class="controls">
+                <h2>Encoder Setup</h2>
+                <div>
+                    <label for="constraintLength">Constraint Length (K):</label>
+                    <input type="number" id="constraintLength" value="3" min="2">
+                </div>
+                <div>
+                    <label for="generators">Generators (octal, comma-separated):</label>
+                    <input type="text" id="generators" placeholder="e.g., 7,5">
+                </div>
+                <div>
+                    <label for="binaryMessage">Binary Message (0s and 1s):</label>
+                    <input type="text" id="binaryMessage" placeholder="e.g., 1011">
+                </div>
+                <button id="setGeneratorButton">Initialize Encoder & Load Message</button>
+                <button id="nextStepButton" disabled>Next Encoding Step</button>
+                <p id="errorMessage" class="error-message"></p>
             </div>
-            <div>
-                <label for="generators">Generators (octal, comma-separated):</label>
-                <input type="text" id="generators" placeholder="e.g., 7,5">
+
+            <div class="state">
+                <h2>Encoder Live State</h2>
+                <p>Constraint Length (K): <span id="stateK" class="mono">N/A</span></p>
+                <p>Generators (Octal): <span id="stateGeneratorsOctal" class="mono">N/A</span></p>
+                <p>Generators (Binary): <span id="stateGeneratorsBinary" class="mono">N/A</span></p>
+                <hr>
+                <p>Full Message (padded): <span id="stateLoadedMessage" class="mono">N/A</span></p>
+                <p>Input Bit Pointer: <span id="stateMessagePointer" class="mono">0</span> / <span id="stateMessageLength" class="mono">0</span></p>
+                <p>Current Memory: <span id="stateMemory" class="mono">N/A</span></emdash><span id="stateMemoryLabels" class="mono"></span></p>
+                <p>Accumulated Output: <span id="stateAccumulatedOutput" class="mono">N/A</span></p>
+                <p>Encoding Complete: <span id="stateEncodingComplete" class="mono">No</span></p>
             </div>
-            <div>
-                <label for="binaryMessage">Binary Message (0s and 1s, spaces optional):</label>
-                <input type="text" id="binaryMessage" placeholder="e.g., 1011">
-            </div>
-            <button id="setGeneratorButton">Initialize Encoder & Load Message</button>
-            <button id="nextStepButton" disabled>Next Encoding Step</button>
-            <p id="errorMessage" class="error-message"></p>
         </div>
-
-        <div class="state">
-            <h2>Encoder Live State</h2>
-            <p>Constraint Length (K): <span id="stateK" class="mono">N/A</span></p>
-            <p>Generators (Octal): <span id="stateGeneratorsOctal" class="mono">N/A</span></p>
-            <p>Generators (Binary): <span id="stateGeneratorsBinary" class="mono">N/A</span></p>
-            <hr>
-            <p>Full Message (with padding): <span id="stateLoadedMessage" class="mono">N/A</span></p>
-            <p>Input Bit Pointer: <span id="stateMessagePointer" class="mono">0</span> / <span id="stateMessageLength" class="mono">0</span></p>
-            <p>Current Memory: <span id="stateMemory" class="mono">N/A</span></emdash><span id="stateMemoryLabels" class="mono"></span></p>
-            <p>Accumulated Output: <span id="stateAccumulatedOutput" class="mono">N/A</span></p>
-            <p>Encoding Complete: <span id="stateEncodingComplete" class="mono">No</span></p>
+        <div class="step-output">
+            <h2>Encoder: Last Step Details & Notifications</h2>
+            <div id="notifications"></div>
         </div>
     </div>
 
-    <div class="step-output">
-        <h2>Last Step Details & Notifications</h2>
-        <div id="notifications"></div>
+    <!-- Decoder Tab -->
+    <div id="decoderTab" class="tab-content">
+        <div class="container">
+            <div class="controls">
+                <h2>Decoder Setup & Control</h2>
+                <div>
+                    <label for="receivedSequence">Received Sequence (binary, e.g., 011011...):</label>
+                    <textarea id="receivedSequence" placeholder="Enter binary sequence (0s and 1s)"></textarea>
+                </div>
+                <div>
+                    <label for="numOriginalBits">Number of Original Message Bits:</label>
+                    <input type="number" id="numOriginalBits" value="0" min="0">
+                </div>
+                <button id="loadSequenceButton">Load Sequence & Initialize</button>
+                <button id="nextAcsStepButton" disabled>Next ACS Step</button>
+                <div class="flex-row">
+                    <button id="performTracebackButton" disabled>Perform Traceback</button>
+                    <input type="checkbox" id="assumeZeroTerminated" checked style="margin-left:10px; margin-top:15px;">
+                    <label for="assumeZeroTerminated" style="margin-top:15px; font-weight:normal;">Assume Zero Terminated</label>
+                </div>
+                <button id="resetDecoderButton">Reset Decoder</button>
+                <p id="decoderErrorMessage" class="error-message"></p>
+            </div>
+
+            <div class="decoder-state-display">
+                <h2>Decoder Live State</h2>
+                <p>Fixed K: <span id="decoderStateK" class="mono">7</span></p>
+                <p>Fixed Generators (Octal): <span id="decoderStateGenerators" class="mono">171, 133</span></p>
+                <p>Num States: <span id="decoderStateNumStates" class="mono">64</span></p>
+                <hr>
+                <p>Sequence Loaded: <span id="decoderStateSeqLoaded" class="mono">No</span></p>
+                <p>Original Message Bits (Expected): <span id="decoderStateNumOrigBits" class="mono">N/A</span></p>
+                <p>Trellis Stages: <span id="decoderStateCurrentStage" class="mono">0</span> / <span id="decoderStateTotalStages" class="mono">0</span></p>
+                <p>ACS Complete: <span id="decoderStateAcsComplete" class="mono">No</span></p>
+                <p>Traceback Complete: <span id="decoderStateTracebackComplete" class="mono">No</span></p>
+                <p>Final Decoded Message: <span id="decoderStateDecodedMessage" class="mono">N/A</span></p>
+                <p>Path Metrics (State 0): <span id="decoderStatePM0" class="mono">N/A</span></p>
+
+            </div>
+        </div>
+        <div class="decoder-step-output">
+            <h2>Decoder: Last Step Details & Notifications</h2>
+            <div id="decoderNotifications"></div>
+        </div>
     </div>
 
 <script>
+    // --- Tab Handling ---
+    function openTab(evt, tabName) {
+        var i, tabcontent, tabbuttons;
+        tabcontent = document.getElementsByClassName("tab-content");
+        for (i = 0; i < tabcontent.length; i++) {
+            tabcontent[i].style.display = "none";
+            tabcontent[i].classList.remove("active");
+        }
+        tabbuttons = document.getElementsByClassName("tab-button");
+        for (i = 0; i < tabbuttons.length; i++) {
+            tabbuttons[i].classList.remove("active");
+        }
+        document.getElementById(tabName).style.display = "block";
+        document.getElementById(tabName).classList.add("active");
+        evt.currentTarget.classList.add("active");
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelector('.tab-button.active').click(); 
+    });
+
+    // --- General Helper ---
+    function formatPathMetric(value) {
+        if (value === null) return "Infinity"; // JSON null was float('inf')
+        if (typeof value === 'number') return value.toFixed(2);
+        return "N/A";
+    }
+
+    // --- Encoder JS (Existing) ---
     const setGeneratorButton = document.getElementById('setGeneratorButton');
     const nextStepButton = document.getElementById('nextStepButton');
     const constraintLengthInput = document.getElementById('constraintLength');
@@ -73,7 +167,6 @@
     const errorMessageDiv = document.getElementById('errorMessage');
     const notificationsDiv = document.getElementById('notifications');
 
-    // State Spans
     const stateK = document.getElementById('stateK');
     const stateGeneratorsOctal = document.getElementById('stateGeneratorsOctal');
     const stateGeneratorsBinary = document.getElementById('stateGeneratorsBinary');
@@ -81,227 +174,395 @@
     const stateMessagePointer = document.getElementById('stateMessagePointer');
     const stateMessageLength = document.getElementById('stateMessageLength');
     const stateMemory = document.getElementById('stateMemory');
-    const stateMemoryLabels = document.getElementById('stateMemoryLabels');
     const stateAccumulatedOutput = document.getElementById('stateAccumulatedOutput');
     const stateEncodingComplete = document.getElementById('stateEncodingComplete');
+    let currentK_encoder = 0;
 
-    let currentK = 0; // Store constraint length globally for UI helpers
-
-    function clearNotifications() {
+    function clearEncoderNotifications() {
         notificationsDiv.innerHTML = '';
         errorMessageDiv.textContent = '';
     }
-
-    function showError(message) {
+    function showEncoderError(message) {
         errorMessageDiv.textContent = message;
-        notificationsDiv.innerHTML = `<p class="error-message">Error: ${message}</p>`;
+        notificationsDiv.innerHTML = `<div class="event-log-entry error-message">Error: ${message}</div>`;
     }
-    
-    function showNotification(message, type = 'info') {
-        const p = document.createElement('p');
-        p.textContent = message;
-        if (type === 'success') p.style.color = 'green';
-        notificationsDiv.prepend(p); // Add new notifications at the top
+    function showEncoderNotification(message, type = 'info') {
+        const div = document.createElement('div');
+        div.className = 'event-log-entry';
+        div.textContent = message;
+        if (type === 'success') div.style.color = 'green';
+        notificationsDiv.prepend(div);
     }
+    function formatEncoderMemory(memoryArray, kVal) {
+      const safeMemoryArray = Array.isArray(memoryArray) ? memoryArray : [];
+      if (kVal < 1) return "N/A";
+      if (kVal === 1) return "[] (No memory cells for K=1)";
+      
+      const memoryCells = kVal -1;
+      if (memoryCells <= 0) return "[] (No memory cells)";
 
-    function formatMemory(memoryArray, kVal) {
-      const safeMemoryArray = memoryArray || []; // Ensure it's an array
-      if (safeMemoryArray.length === 0 && (kVal < 2 || !memoryArray) ) { // check original memoryArray for kVal < 2 case
-          return "[] (No memory cells)";
+      let displayBits = safeMemoryArray.slice(0, memoryCells);
+      if (displayBits.length < memoryCells) {
+          displayBits = displayBits.concat(Array(memoryCells - displayBits.length).fill('?'));
       }
-      if (kVal < 2) return "[] (No memory cells)"; // K=1 means no memory cells
-
+      
       const labels = [];
-      for (let i = 0; i < kVal - 1; i++) {
-          // Ensure safeMemoryArray has enough elements, or show placeholder
-          labels.push(`M<sub>${i}</sub>=${safeMemoryArray[i] !== undefined ? safeMemoryArray[i] : '?'}`);
+      for (let i = 0; i < memoryCells; i++) {
+          labels.push(`M<sub>${i}</sub>=${displayBits[i]}`);
       }
-      return `[${safeMemoryArray.join(', ')}] (${labels.join(', ')})`;
+      return `[${displayBits.join('')}] (${labels.join(', ')})`;
     }
-    
     function updateEncoderStateDisplay(config, liveState) {
         if (config) {
-            currentK = config.constraint_length;
+            currentK_encoder = config.constraint_length;
             stateK.textContent = config.constraint_length;
             stateGeneratorsOctal.textContent = (config.generators_octal || []).join(', ');
-            stateGeneratorsBinary.innerHTML = (config.binary_generators || []).join('<br>');
-            stateLoadedMessage.textContent = 'N/A'; // Will be updated by MESSAGE_LOADED event
+            stateGeneratorsBinary.innerHTML = (config.binary_generators || []).map(g => `<span class="mono">${g}</span>`).join('<br>');
+            stateLoadedMessage.textContent = 'N/A'; 
         }
         if (liveState) {
-            stateMemory.innerHTML = formatMemory(liveState.memory, currentK);
-            stateAccumulatedOutput.textContent = (liveState.accumulated_output || []).length > 0 ? (liveState.accumulated_output || []).join('') : '[]';            stateMessagePointer.textContent = liveState.message_pointer;
+            stateMemory.innerHTML = formatEncoderMemory(liveState.memory, currentK_encoder);
+            stateAccumulatedOutput.textContent = (liveState.accumulated_output || []).length > 0 ? (liveState.accumulated_output || []).join('') : '[]';
+            stateMessagePointer.textContent = liveState.message_pointer;
             stateMessageLength.textContent = liveState.message_length || 0;
             stateEncodingComplete.textContent = liveState.is_complete ? 'Yes' : 'No';
-
-            if (liveState.is_complete) {
-                nextStepButton.disabled = true;
-            } else {
-                nextStepButton.disabled = false;
-            }
+            nextStepButton.disabled = liveState.is_complete;
         }
     }
-    
-    function displayEventDetails(eventData) {
+    function displayEncoderEventDetails(eventData) {
         if (!eventData) return;
-
         const eventDiv = document.createElement('div');
-        eventDiv.style.borderBottom = "1px dashed #ddd";
-        eventDiv.style.marginBottom = "10px";
-        eventDiv.style.paddingBottom = "10px";
-
+        eventDiv.className = 'event-log-entry';
         let content = `<h3>Event: ${eventData.type}</h3>`;
-
         switch (eventData.type) {
             case "MESSAGE_LOADED":
-                content += `<p class="mono">Message: ${eventData.message_loaded.join('')} (Length: ${eventData.message_length})</p>`;
-                content += `<p class="mono">Message: ${(eventData.message_loaded || []).join('')} (Length: ${(eventData.message_loaded || []).length})</p>`;
-                stateLoadedMessage.textContent = (eventData.message_loaded || []).join('');stateMessageLength.textContent = eventData.message_length;
+                content += `<p class="mono">Message: ${(eventData.message_loaded || []).join('')} (Length: ${eventData.message_length || 0})</p>`;
+                stateLoadedMessage.textContent = (eventData.message_loaded || []).join('');
+                stateMessageLength.textContent = eventData.message_length || 0;
                 break;
             case "ENCODE_STEP":
                 content += `<p><span class="mono">Input Bit: ${eventData.input_bit}</span></p>`;
-                content += `<p><span class="mono">Memory Before: ${formatMemory(eventData.memory_before, currentK)}</span></p>`;
-                content += `<p><span class="mono">Effective Register (Input, M<sub>0</sub>,...M<sub>K-2</sub>): [${(eventData.effective_register_contents || []).join(', ')}]</span></p>`;
+                content += `<p><span class="mono">Memory Before: ${formatEncoderMemory(eventData.memory_before, currentK_encoder)}</span></p>`;
+                content += `<p><span class="mono">Effective Register: [${(eventData.effective_register_contents || []).join(', ')}]</span></p>`;
                 content += `<h4>Generator Calculations:</h4><div id="stepGeneratorCalculations">`;
-                eventData.generators_details.forEach((gen, idx) => {
+                (eventData.generators_details || []).forEach((gen, idx) => {
                     content += `<div><strong>Generator ${idx + 1} ('${gen.generator_octal}' / '${gen.generator_binary}')</strong>`;
-                    let xorTerms = [];
-                    let xorDesc = [];
-                    if (gen.involved_source_bits && gen.involved_source_bits.length > 0) {
-                        gen.involved_source_bits.forEach(srcBit => {
-                            xorTerms.push(srcBit.value_tapped);
-                            xorDesc.push(`${srcBit.tap_description}=${srcBit.value_tapped}`);
-                        });
-                        content += `<p class="mono">  Taps: ${xorDesc.join('; ')}</p>`;
-                        content += `<p class="mono">  XOR Sum: ${xorTerms.join(' \u2295 ')} = ${gen.output_bit}</p>`;
-                    } else if (gen.generator_binary.includes('0') && !gen.generator_binary.includes('1')) { // All zero generator
-                         content += `<p class="mono">  XOR Sum: 0 (generator polynomial is zero)</p>`;
-                    }
-                    else {
-                        content += `<p class="mono">  XOR Sum: 0 (no active taps for this input/memory state or generator is all zeros)</p>`;
-                    }
+                    let xorTerms = (gen.involved_source_bits || []).map(src => src.value_tapped);
+                    let xorDesc = (gen.involved_source_bits || []).map(src => `${src.tap_description}=${src.value_tapped}`);
+                    content += `<p class="mono">  Taps: ${xorDesc.join('; ') || 'N/A'}</p>`;
+                    content += `<p class="mono">  XOR Sum: ${xorTerms.join(' \u2295 ') || '0'} = ${gen.output_bit}</p>`;
                     content += `<p class="mono">  Output Bit: ${gen.output_bit}</p></div>`;
                 });
-                content += `</div>`; // End stepGeneratorCalculations
+                content += `</div>`;
                 content += `<p><span class="mono">Output for this step: [${(eventData.output_bits_for_step || []).join(', ')}]</span></p>`;
-                content += `<p><span class="mono">Memory After: ${formatMemory(eventData.memory_after, currentK)}</span></p>`;
-                content += `<p class="mono">Accumulated Output (before this step): ${(eventData.accumulated_encoded_data_before_step || []).join('') || '[]'}</p>`;
+                content += `<p><span class="mono">Memory After: ${formatEncoderMemory(eventData.memory_after, currentK_encoder)}</span></p>`;
                 break;
             case "ENCODING_COMPLETE":
-                content += `<p class="mono">Original Message Processed (incl. padding): ${(eventData.message_processed || []).join('')}</p>`;
                 content += `<p class="mono">Full Encoded Output: ${(eventData.full_encoded_output || []).join('')}</p>`;
-                showNotification("Encoding for the current message is complete!", "success");
+                showEncoderNotification("Encoding complete!", "success");
                 break;
-            case "ENCODER_RESET":
-                content += `<p>Status: ${eventData.status}</p>`;
-                break;
-            default:
-                content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
+            case "ENCODER_RESET": content += `<p>Status: ${eventData.status}</p>`; break;
+            default: content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
         }
         eventDiv.innerHTML = content;
         notificationsDiv.prepend(eventDiv);
     }
 
     setGeneratorButton.addEventListener('click', async () => {
-        clearNotifications();
+        clearEncoderNotifications();
         const kVal = constraintLengthInput.value;
         const gens = generatorsInput.value;
         const msg = binaryMessageInput.value;
 
-        if (!kVal || parseInt(kVal) < 2) {
-            showError("Constraint Length (K) must be an integer >= 2.");
-            return;
+        if (!kVal || parseInt(kVal) < 1) { 
+            showEncoderError("Constraint Length (K) must be an integer >= 1."); return;
         }
-        if (!gens.trim()) {
-            showError("Generators must be provided.");
-            return;
-        }
-        // Message can be empty, encoder handles it.
+        if (!gens.trim()) { showEncoderError("Generators must be provided."); return; }
 
         try {
             const response = await fetch('/set_generator', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    constraint_length: parseInt(kVal),
-                    generators: gens,
-                    message: msg
-                }),
+                body: JSON.stringify({ constraint_length: parseInt(kVal), generators: gens, message: msg }),
             });
-
             const data = await response.json();
             if (!response.ok) {
-                showError(data.message || `Error: ${response.status}`);
-                nextStepButton.disabled = true;
-                return;
+                showEncoderError(data.message || `Error: ${response.status}`);
+                nextStepButton.disabled = true; return;
             }
+            showEncoderNotification(data.message, "success");
+            updateEncoderStateDisplay(data.config, null);
+            if (data.initial_event) { displayEncoderEventDetails(data.initial_event); }
             
-            showNotification(data.message, "success");
-            updateEncoderStateDisplay(data.config, null); // Update K, Generators display
-
-            if (data.initial_event) {
-                displayEventDetails(data.initial_event); // Display MESSAGE_LOADED event
-            }
-            // Initial state update for memory, pointer etc. (usually all zeros at start)
-            // The server now sends full encoder state after each step, so we can rely on that for subsequent updates.
-            // For the very first load, we can use some defaults or wait for the first next_step.
-            // Let's assume the initial state for memory and pointer is 0/empty.
-            // The initial MESSAGE_LOADED event will give message length.
-            // The `config` part of response has `padded_message_length`.
+            const initialMemory = data.config.constraint_length > 1 ? Array(data.config.constraint_length - 1).fill(0) : [];
             updateEncoderStateDisplay(null, {
-                 memory: Array(parseInt(kVal)-1).fill(0), // Initial memory is zeros
+                 memory: initialMemory,
                  accumulated_output: [],
                  message_pointer: 0,
                  message_length: data.config.padded_message_length,
-                 is_complete: data.config.padded_message_length === 0 // Complete if message is empty
+                 is_complete: data.config.padded_message_length === 0
             });
-
-
             nextStepButton.disabled = (data.config.padded_message_length === 0);
 
-        } catch (error) {
-            showError('Network or client-side error: ' + error.message);
-            nextStepButton.disabled = true;
-        }
+        } catch (error) { showEncoderError('Network error: ' + error.message); nextStepButton.disabled = true; }
     });
 
     nextStepButton.addEventListener('click', async () => {
-        clearNotifications(); // Clear only general error, keep event log
-        errorMessageDiv.textContent = ''; // Clear specific error message div
+        errorMessageDiv.textContent = '';
         try {
-            const response = await fetch('/next_step', {
-                method: 'POST',
-            });
+            const response = await fetch('/next_step', { method: 'POST' });
             const data = await response.json();
+            if (!response.ok) { showEncoderError(data.message || `Error: ${response.status}`); return; }
+            
+            if (data.details_from_method) { showEncoderNotification(`Status: ${data.status_from_method} - ${data.details_from_method}`); }
+            if (data.primary_event) { displayEncoderEventDetails(data.primary_event); }
+            if (data.encoder_state_after_step) { updateEncoderStateDisplay(null, data.encoder_state_after_step); }
+            
+        } catch (error) { showEncoderError('Network error: ' + error.message); }
+    });
+    updateEncoderStateDisplay(null, { memory: [], accumulated_output: [], message_pointer: 0, message_length: 0, is_complete: true });
+    nextStepButton.disabled = true;
 
+
+    // --- Decoder JS ---
+    const loadSequenceButton = document.getElementById('loadSequenceButton');
+    const nextAcsStepButton = document.getElementById('nextAcsStepButton');
+    const performTracebackButton = document.getElementById('performTracebackButton');
+    const resetDecoderButton = document.getElementById('resetDecoderButton');
+    const receivedSequenceInput = document.getElementById('receivedSequence');
+    const numOriginalBitsInput = document.getElementById('numOriginalBits');
+    const assumeZeroTerminatedCheckbox = document.getElementById('assumeZeroTerminated');
+    const decoderErrorMessageDiv = document.getElementById('decoderErrorMessage');
+    const decoderNotificationsDiv = document.getElementById('decoderNotifications');
+
+    const decoderStateK = document.getElementById('decoderStateK');
+    const decoderStateGenerators = document.getElementById('decoderStateGenerators');
+    const decoderStateNumStates = document.getElementById('decoderStateNumStates');
+    const decoderStateSeqLoaded = document.getElementById('decoderStateSeqLoaded');
+    const decoderStateNumOrigBits = document.getElementById('decoderStateNumOrigBits');
+    const decoderStateCurrentStage = document.getElementById('decoderStateCurrentStage');
+    const decoderStateTotalStages = document.getElementById('decoderStateTotalStages');
+    const decoderStateAcsComplete = document.getElementById('decoderStateAcsComplete');
+    const decoderStateTracebackComplete = document.getElementById('decoderStateTracebackComplete');
+    const decoderStateDecodedMessage = document.getElementById('decoderStateDecodedMessage');
+    const decoderStatePM0 = document.getElementById('decoderStatePM0');
+
+
+    function clearDecoderNotifications() {
+        decoderNotificationsDiv.innerHTML = '';
+        decoderErrorMessageDiv.textContent = '';
+    }
+    function showDecoderError(message) {
+        decoderErrorMessageDiv.textContent = message;
+        decoderNotificationsDiv.innerHTML = `<div class="event-log-entry error-message">Error: ${message}</div>`;
+    }
+    function showDecoderNotification(message, type = 'info') {
+        const div = document.createElement('div');
+        div.className = 'event-log-entry';
+        div.textContent = message;
+        if (type === 'success') div.style.color = 'green';
+        else if (type === 'info') div.style.color = 'blue';
+        decoderNotificationsDiv.prepend(div);
+    }
+
+    function updateDecoderUIFromState(state) {
+        if (!state) return;
+
+        if (state.fixed_params) {
+            decoderStateK.textContent = state.fixed_params.K;
+            decoderStateGenerators.textContent = state.fixed_params.G_octal.join(', ');
+            decoderStateNumStates.textContent = state.fixed_params.num_states;
+        }
+
+        decoderStateSeqLoaded.textContent = state.is_sequence_loaded ? 'Yes' : 'No';
+        decoderStateNumOrigBits.textContent = state.is_sequence_loaded ? state.num_original_message_bits : 'N/A';
+        decoderStateCurrentStage.textContent = state.current_trellis_stage_idx;
+        decoderStateTotalStages.textContent = state.T_stages_total;
+        decoderStateAcsComplete.textContent = state.is_acs_complete ? 'Yes' : 'No';
+        decoderStateTracebackComplete.textContent = state.is_traceback_complete ? 'Yes' : 'No';
+        
+        const decodedMsg = state.decoded_message_final || [];
+        decoderStateDecodedMessage.textContent = state.is_traceback_complete ? (decodedMsg.length > 0 ? decodedMsg.join('') : '[] (empty)') : 'N/A';
+        
+        const pm = state.path_metrics || [];
+        decoderStatePM0.textContent = (pm.length > 0) ? formatPathMetric(pm[0]) : 'N/A';
+
+        loadSequenceButton.disabled = false;
+        nextAcsStepButton.disabled = !(state.is_sequence_loaded && !state.is_acs_complete && state.T_stages_total > 0);
+        performTracebackButton.disabled = !(state.is_sequence_loaded && state.is_acs_complete && state.T_stages_total > 0); // Allow re-traceback
+        resetDecoderButton.disabled = false;
+    }
+    
+    function displayDecoderEventDetails(eventData) {
+        if (!eventData) return;
+        const eventDiv = document.createElement('div');
+        eventDiv.className = 'event-log-entry decoder-event-detail';
+        let content = `<h3>Event: ${eventData.type}</h3>`;
+
+        switch (eventData.type) {
+            case "DECODER_RESET":
+                content += `<p>${eventData.status}</p>`;
+                break;
+            case "DECODER_RECEIVED_SEQUENCE_LOADED":
+                content += `<p class="mono">Sequence Loaded: ${(eventData.sequence_loaded || []).join('') || '[]'}</p>`;
+                content += `<p>Original Message Bits: ${eventData.num_original_bits}</p>`;
+                content += `<p>Total Trellis Stages: ${eventData.total_stages}</p>`;
+                if (eventData.initial_path_metrics && eventData.initial_path_metrics.length > 0) {
+                     content += `<p class="mono">Initial Path Metric (State 0): ${formatPathMetric(eventData.initial_path_metrics[0])}</p>`;
+                }
+                break;
+            case "DECODER_ACS_STEP":
+                content += `<p>Processed Trellis Stage: ${eventData.stage_processed_idx}</p>`;
+                content += `<p class="mono">Received Pair for Stage: [${(eventData.received_pair_for_stage || []).join(',')}]</p>`;
+                if (eventData.path_metrics_at_stage_end && eventData.path_metrics_at_stage_end.length > 0) {
+                    content += `<p class="mono">Path Metric (State 0) after step: ${formatPathMetric(eventData.path_metrics_at_stage_end[0])}</p>`;
+                }
+                 content += `<p><small>Full PMs and pointers for this step were logged to browser console.</small></p>`;
+                 console.log("DECODER_ACS_STEP Event Data:", JSON.parse(JSON.stringify(eventData))); // Deep copy for console
+                break;
+            case "DECODER_ACS_COMPLETE":
+                content += `<p>ACS completed after ${eventData.total_stages_processed} stages.</p>`;
+                if (eventData.final_path_metrics_at_T && eventData.final_path_metrics_at_T.length > 0) {
+                    content += `<p class="mono">Final Path Metric (State 0): ${formatPathMetric(eventData.final_path_metrics_at_T[0])}</p>`;
+                }
+                break;
+            case "DECODER_TRACEBACK_COMPLETE":
+                content += `<p class="mono">Decoded Message: ${(eventData.decoded_message || []).join('') || '[]'}</p>`;
+                if (eventData.full_decoded_sequence_with_tail) {
+                    content += `<p class="mono">Full Decoded (incl. tail): ${eventData.full_decoded_sequence_with_tail.join('')}</p>`;
+                }
+                break;
+            default:
+                content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
+        }
+        eventDiv.innerHTML = content;
+        decoderNotificationsDiv.prepend(eventDiv);
+    }
+
+    loadSequenceButton.addEventListener('click', async () => {
+        clearDecoderNotifications();
+        const sequenceStr = receivedSequenceInput.value;
+        const numOrigBits = numOriginalBitsInput.value;
+
+        if (!sequenceStr.trim()) {
+            showDecoderError("Received sequence cannot be empty."); return;
+        }
+        if (!/^[01,\s]*$/.test(sequenceStr)) {
+            showDecoderError("Received sequence must contain only 0s, 1s, commas, or spaces."); return;
+        }
+        const cleanedSequence = sequenceStr.replace(/[^01]/g, ""); // Remove spaces and commas
+        if (cleanedSequence.length % 2 !== 0) {
+            showDecoderError("Received sequence length (after removing spaces/commas) must be a multiple of 2."); return;
+        }
+        if (parseInt(numOrigBits) < 0) {
+             showDecoderError("Number of original message bits cannot be negative."); return;
+        }
+        
+        try {
+            const response = await fetch('/decoder/load_sequence', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    received_sequence: cleanedSequence, // Send cleaned sequence
+                    num_original_message_bits: parseInt(numOrigBits)
+                }),
+            });
+            const data = await response.json(); // This is where the "Unexpected token 'I'" error occurred
             if (!response.ok) {
-                showError(data.message || `Error: ${response.status}`);
-                return;
+                showDecoderError(data.message || `Error: ${response.status}`);
+            } else {
+                showDecoderNotification(data.message || "Sequence processed.", data.status === "success" ? "success" : "info");
             }
-            
-            if (data.details_from_method) {
-                 showNotification(`Status: ${data.status_from_method} - ${data.details_from_method}`);
-            }
+            if (data.event) displayDecoderEventDetails(data.event);
+            if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
 
-            if (data.primary_event) {
-                displayEventDetails(data.primary_event);
-            }
-            
-            if (data.encoder_state_after_step) {
-                updateEncoderStateDisplay(null, data.encoder_state_after_step);
-            }
-
-            if (data.status_from_method === "already_complete" || data.status_from_method === "encoding_complete") {
-                nextStepButton.disabled = true;
-            }
-
-        } catch (error) {
-            showError('Network or client-side error: ' + error.message);
+        } catch (error) { 
+            console.error("Fetch error in loadSequenceButton:", error);
+            showDecoderError('Network or client-side parsing error: ' + error.message); 
         }
     });
 
-    // Initial UI state
-    updateEncoderStateDisplay(null, {
-        memory: [], accumulated_output: [], message_pointer: 0, message_length: 0, is_complete: false
+    nextAcsStepButton.addEventListener('click', async () => {
+        decoderErrorMessageDiv.textContent = ''; 
+        try {
+            const response = await fetch('/decoder/next_acs_step', { method: 'POST' });
+            const data = await response.json();
+
+            if (!response.ok && response.status !== 200) { 
+                 showDecoderError(data.message || `Error: ${response.status}`);
+            } else {
+                 showDecoderNotification(data.message || "ACS Step processed.", (data.status === "success" || data.status === "acs_step_processed" || data.status === "acs_complete" || response.status === 200) ? "info" : "success");
+            }
+            if (data.event) displayDecoderEventDetails(data.event);
+            if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
+
+        } catch (error) { 
+            console.error("Fetch error in nextAcsStepButton:", error);
+            showDecoderError('Network or client-side parsing error: ' + error.message); 
+        }
+    });
+    
+    performTracebackButton.addEventListener('click', async () => {
+        decoderErrorMessageDiv.textContent = '';
+        const assumeZero = assumeZeroTerminatedCheckbox.checked;
+        try {
+            const response = await fetch('/decoder/perform_traceback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assume_zero_terminated: assumeZero }),
+            });
+            const data = await response.json();
+            if (!response.ok && response.status !== 200) {
+                 showDecoderError(data.message || `Error: ${response.status}`);
+            } else {
+                 showDecoderNotification(data.message || "Traceback processed.", data.status === "success" || response.status === 200 ? "success" : "info");
+            }
+            if (data.event) displayDecoderEventDetails(data.event);
+            if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
+
+        } catch (error) { 
+            console.error("Fetch error in performTracebackButton:", error);
+            showDecoderError('Network or client-side parsing error: ' + error.message); 
+        }
+    });
+
+    resetDecoderButton.addEventListener('click', async () => {
+        clearDecoderNotifications();
+        try {
+            const response = await fetch('/decoder/reset', { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) {
+                 showDecoderError(data.message || `Error: ${response.status}`);
+            } else {
+                showDecoderNotification(data.message || "Decoder reset.", "success");
+            }
+            if (data.event) displayDecoderEventDetails(data.event);
+            if (data.decoder_state) {
+                updateDecoderUIFromState(data.decoder_state);
+            } else { 
+                const defaultNumStates = 64;
+                updateDecoderUIFromState({
+                    is_sequence_loaded: false, current_trellis_stage_idx: 0, T_stages_total: 0,
+                    is_acs_complete: false, is_traceback_complete: false,
+                    path_metrics: [0.0].concat(Array(defaultNumStates - 1).fill(null)), // Use null for Infinity
+                    decoded_message_final: [], num_original_message_bits: 0,
+                    fixed_params: { K: 7, G_octal: ["171", "133"], num_states: defaultNumStates }
+                });
+            }
+        } catch (error) { 
+            console.error("Fetch error in resetDecoderButton:", error);
+            showDecoderError('Network or client-side parsing error: ' + error.message); 
+        }
+    });
+
+    // Initial Decoder UI state
+    const initialDecoderNumStates = 64;
+    updateDecoderUIFromState({
+        is_sequence_loaded: false, current_trellis_stage_idx: 0, T_stages_total: 0,
+        is_acs_complete: false, is_traceback_complete: false,
+        path_metrics: [0.0].concat(Array(initialDecoderNumStates - 1).fill(null)), // Use null for Infinity
+        decoded_message_final: [], num_original_message_bits: 0,
+        fixed_params: { K: 7, G_octal: ["171", "133"], num_states: initialDecoderNumStates }
     });
 
 </script>
