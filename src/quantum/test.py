@@ -1,6 +1,6 @@
 
 from quantum import ConvolutionalEncoder
-from helpers import explain_generator_taps
+from quantum.helpers import explain_generator_taps
 
 
 if __name__ == '__main__':
