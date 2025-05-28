@@ -1,19 +1,12 @@
 import os
 import json
-
-import math
+import math # Required for math.isinf and float('inf')
 
 from flask import Flask, send_file, request, jsonify
 
 from src.quantum.quantum_encoder import ConvolutionalEncoder
-# Ensure this path is correct for your project structure
-from src.quantum.quantum_decoder import ViterbiDecoderK7G171_133_Stepwise 
+from src.quantum.quantum_decoder import ViterbiDecoderK7G171_133_Stepwise
 
-
-def sanitize_floats(xs):
-    """Replace any NaN or ±Inf with None, so jsonify produces JSON null."""
-    return [None if (not isinstance(x, (int, float)) or math.isinf(x) or math.isnan(x)) else x
-            for x in xs]
 
 app = Flask(__name__)
 
@@ -27,38 +20,50 @@ def flask_encoder_listener(event_data):
 
 # --- Decoder Globals ---
 viterbi_decoder_instance = None
-all_decoder_events = [] # Separate list for decoder events
+all_decoder_events = []
+
+# Helper to sanitize lists with float('inf') for JSON
+def sanitize_path_metrics_for_json(metrics_list):
+    if metrics_list is None:
+        return None
+    # Replace float('inf') with None, which becomes JSON null
+    # Also handle float('-inf') if it could ever occur, though unlikely for path metrics
+    return [
+        None if m is not None and (math.isinf(m) or math.isnan(m)) else m 
+        for m in metrics_list
+    ]
 
 def flask_decoder_listener(event_data):
     global all_decoder_events
+    
+    # Sanitize known path metrics fields in event_data
+    # These are the keys used in ViterbiDecoderK7G171_133_Stepwise events
+    for key in ['initial_path_metrics', 'path_metrics_at_stage_start', 
+                'path_metrics_at_stage_end', 'final_path_metrics_at_T']:
+        if key in event_data and event_data[key] is not None:
+            event_data[key] = sanitize_path_metrics_for_json(event_data[key])
+            
     all_decoder_events.append(event_data)
-    # print(f"Flask Decoder Listener Captured Event: {event_data.get('type')}")
 
 
 def get_or_create_decoder():
-    global viterbi_decoder_instance, all_decoder_events
+    global viterbi_decoder_instance
+    # Removed all_decoder_events clearing from here, routes handle it.
     if viterbi_decoder_instance is None:
-        # all_decoder_events = [] # Clear events WHEN a new instance is made.
-                                # The ViterbiDecoder's __init__ fires DECODER_RESET,
-                                # so this ensures only that reset (and subsequent events) are captured.
-        # However, if get_or_create_decoder is called multiple times *without* viterbi_decoder_instance being None,
-        # all_decoder_events would persist.
-        # The current routes clear all_decoder_events before specific actions like load or reset,
-        # which is a more robust approach.
         viterbi_decoder_instance = ViterbiDecoderK7G171_133_Stepwise()
         viterbi_decoder_instance.add_listener(flask_decoder_listener)
-        # First event for a new instance will be DECODER_RESET from its __init__
     return viterbi_decoder_instance
 
 def get_current_decoder_state_dict(decoder_inst):
-    if not decoder_inst: # Should not happen if get_or_create_decoder is always used
+    if not decoder_inst:
+        default_num_states = 64 # K=7 -> 2^(7-1) states
         return {
             "is_sequence_loaded": False, "current_trellis_stage_idx": 0, "T_stages_total": 0,
             "is_acs_complete": False, "is_traceback_complete": False,
-            "path_metrics": sanitize_floats([0.0] + [float('inf')] * ( (2**(7-1)) -1)), # Default for 64 states
+            "path_metrics": sanitize_path_metrics_for_json([0.0] + [float('inf')] * (default_num_states - 1)),
             "decoded_message_final": [],
             "num_original_message_bits": 0,
-            "fixed_params": {"K": 7, "G": ["171", "133"], "num_states": 64}
+            "fixed_params": {"K": 7, "G_octal": ["171", "133"], "num_states": default_num_states}
         }
     return {
         "is_sequence_loaded": decoder_inst.is_sequence_loaded,
@@ -66,10 +71,10 @@ def get_current_decoder_state_dict(decoder_inst):
         "T_stages_total": decoder_inst.get_total_trellis_stages(),
         "is_acs_complete": decoder_inst.is_acs_complete,
         "is_traceback_complete": decoder_inst.is_traceback_complete,
-        "path_metrics": sanitize_floats(decoder_inst.get_current_path_metrics()), 
+        "path_metrics": sanitize_path_metrics_for_json(decoder_inst.get_current_path_metrics()), 
         "decoded_message_final": list(decoder_inst.decoded_message_final),
         "num_original_message_bits": decoder_inst.num_original_message_bits,
-        "fixed_params": { # Add fixed params for UI display
+        "fixed_params": {
             "K": decoder_inst.constraint_length,
             "G_octal": decoder_inst.generators_octal,
             "num_states": decoder_inst.num_states
@@ -78,7 +83,7 @@ def get_current_decoder_state_dict(decoder_inst):
 
 @app.route("/")
 def index():
-    return send_file('src/index.html') # Make sure this path is correct
+    return send_file('src/index.html')
 
 # --- Encoder Routes (existing - unchanged) ---
 @app.route('/set_generator', methods=['POST'])
@@ -131,6 +136,8 @@ def set_generator():
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
+        # It's good practice to log the full exception server-side for debugging
+        app.logger.error(f"Unexpected error in /set_generator: {e}", exc_info=True)
         return jsonify({"status": "error", "message": f"An unexpected error occurred: {str(e)}"}), 500
 
 @app.route('/next_step', methods=['POST'])
@@ -148,7 +155,7 @@ def next_step():
             if e.get("type") in ["ENCODE_STEP", "ENCODING_COMPLETE"]:
                 primary_event_for_step = e
                 break
-        if not primary_event_for_step: # Fallback to last event if specific types not found
+        if not primary_event_for_step and newly_generated_events: 
             primary_event_for_step = newly_generated_events[-1]
             
     return jsonify({
@@ -165,7 +172,7 @@ def next_step():
         }
     })
 
-# --- Viterbi Decoder Routes (Mostly existing, confirmed for Stepwise class) ---
+# --- Viterbi Decoder Routes ---
 @app.route('/decoder/load_sequence', methods=['POST'])
 def decoder_load_sequence():
     global viterbi_decoder_instance, all_decoder_events
@@ -180,47 +187,44 @@ def decoder_load_sequence():
 
         parsed_sequence = []
         if received_sequence_str.strip():
-            raw_bits = received_sequence_str.replace(' ', '').replace(',', '') # Allow commas too
+            raw_bits = received_sequence_str.replace(' ', '').replace(',', '')
             if not all(c in '01' for c in raw_bits):
                 raise ValueError("Received sequence must only contain 0s and 1s.")
             parsed_sequence = [int(bit) for bit in raw_bits]
         
+        all_decoder_events = [] # Fresh slate for events FOR THIS ACTION
         decoder = get_or_create_decoder() 
         
-        all_decoder_events = [] # Fresh slate for events for this load operation
-                                # DECODER_RESET (from load_received_sequence) and DECODER_RECEIVED_SEQUENCE_LOADED will be captured
-
         load_outcome = decoder.load_received_sequence(parsed_sequence, num_original_bits)
         
-        # The most relevant event is DECODER_RECEIVED_SEQUENCE_LOADED
-        # DECODER_RESET would have been fired by _reset_decoding_state inside load_received_sequence
         final_event_for_response = None
-        for e in reversed(all_decoder_events): # Get the latest, most significant event
+        for e in reversed(all_decoder_events): 
             if e.get("type") == "DECODER_RECEIVED_SEQUENCE_LOADED":
                 final_event_for_response = e
                 break
         if not final_event_for_response and all_decoder_events: 
-            final_event_for_response = all_decoder_events[-1] # Fallback (e.g. only DECODER_RESET)
+            final_event_for_response = all_decoder_events[-1] 
 
         return jsonify({
-            "status": "success", # Or load_outcome['status'] if it can fail gracefully and return error status
+            "status": load_outcome.get("status", "error"), # Use status from method outcome
             "message": load_outcome.get("details", "Sequence load processed."),
-            "event": final_event_for_response,
-            "decoder_state": get_current_decoder_state_dict(decoder)
+            "event": final_event_for_response, # Already sanitized by flask_decoder_listener
+            "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized by getter
         })
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e), "decoder_state": get_current_decoder_state_dict(viterbi_decoder_instance)}), 400
     except Exception as e:
+        app.logger.error(f"Unexpected error in /decoder/load_sequence: {e}", exc_info=True)
         return jsonify({"status": "error", "message": f"An unexpected error occurred: {str(e)}", "decoder_state": get_current_decoder_state_dict(viterbi_decoder_instance)}), 500
 
 @app.route('/decoder/next_acs_step', methods=['POST'])
 def decoder_next_acs_step():
     global viterbi_decoder_instance, all_decoder_events
-    decoder = get_or_create_decoder() # Ensures instance exists
+    decoder = get_or_create_decoder()
     if not decoder.is_sequence_loaded:
         return jsonify({"status": "error", "message": "No sequence loaded.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
-    if decoder.is_acs_complete:
-        return jsonify({"status": "info", "message": "ACS already complete.", "decoder_state": get_current_decoder_state_dict(decoder)}), 200 # Use 200 for info
+    if decoder.is_acs_complete: # This is an info state, not an error preventing action
+        return jsonify({"status": "info", "message": "ACS already complete.", "event": None, "decoder_state": get_current_decoder_state_dict(decoder)}), 200
 
     num_events_before_step = len(all_decoder_events)
     step_outcome = decoder.go_to_next_decode_step() 
@@ -232,14 +236,14 @@ def decoder_next_acs_step():
             if e.get("type") in ["DECODER_ACS_STEP", "DECODER_ACS_COMPLETE"]:
                 primary_event = e
                 break
-        if not primary_event: primary_event = newly_generated_events[-1]
+        if not primary_event and newly_generated_events: primary_event = newly_generated_events[-1]
         
     return jsonify({
         "status": step_outcome.get("status", "success"), 
         "message": step_outcome.get("details", "ACS step performed."),
         "method_outcome": step_outcome, 
-        "event": primary_event,
-        "decoder_state": get_current_decoder_state_dict(decoder)
+        "event": primary_event, # Already sanitized
+        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
     })
 
 @app.route('/decoder/perform_traceback', methods=['POST'])
@@ -250,8 +254,7 @@ def decoder_perform_traceback():
         return jsonify({"status": "error", "message": "No sequence loaded.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
     if not decoder.is_acs_complete:
         return jsonify({"status": "error", "message": "ACS not yet complete.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
-    # if decoder.is_traceback_complete: # Allow re-running traceback
-    #      return jsonify({"status": "info", "message": "Traceback already performed. Re-running.", "decoder_state": get_current_decoder_state_dict(decoder)}), 200
+    # Allow re-running traceback, so don't block if already complete.
 
     data = request.get_json()
     assume_zero_terminated = data.get('assume_zero_terminated', True)
@@ -266,43 +269,36 @@ def decoder_perform_traceback():
             if e.get("type") == "DECODER_TRACEBACK_COMPLETE":
                 primary_event = e
                 break
-        if not primary_event: primary_event = newly_generated_events[-1]
+        if not primary_event and newly_generated_events: primary_event = newly_generated_events[-1]
 
     return jsonify({
         "status": traceback_outcome.get("status", "success"), 
         "message": traceback_outcome.get("details", "Traceback performed."),
         "method_outcome": traceback_outcome,
-        "event": primary_event,
-        "decoder_state": get_current_decoder_state_dict(decoder)
+        "event": primary_event, # Sanitized
+        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
     })
 
 @app.route('/decoder/reset', methods=['POST'])
 def decoder_reset():
     global viterbi_decoder_instance, all_decoder_events
     
-    all_decoder_events = [] # Clear old events
-    viterbi_decoder_instance = None # Force re-creation
-    decoder = get_or_create_decoder() # This will create new instance, add listener, and init will fire DECODER_RESET.
+    all_decoder_events = [] 
+    viterbi_decoder_instance = None 
+    decoder = get_or_create_decoder() # Fires DECODER_RESET via init -> _reset_decoding_state -> notify
 
     reset_event = None
-    # The DECODER_RESET event is fired by ViterbiDecoderK7G171_133_Stepwise.__init__ via _reset_decoding_state
-    if all_decoder_events and all_decoder_events[0].get("type") == "DECODER_RESET":
-        reset_event = all_decoder_events[0]
-    # If there are other events, it's unexpected here, but grab the last one as a fallback.
-    elif all_decoder_events:
-        reset_event = all_decoder_events[-1]
-
+    if all_decoder_events: # DECODER_RESET should be the first and only event here
+        reset_event = all_decoder_events[0] # Already sanitized by flask_decoder_listener
 
     return jsonify({
         "status": "success",
         "message": "Decoder reset.",
-        "event": reset_event, # Should be the DECODER_RESET event
-        "decoder_state": get_current_decoder_state_dict(decoder)
+        "event": reset_event,
+        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
     })
 
 def main():
-    # For local development, you might want to use a different port or debug=True
-    # For Firebase/Cloud Run, PORT environment variable is standard.
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True) 
 
 if __name__ == "__main__":
