@@ -61,8 +61,9 @@ def get_current_encoder_state_dict(enc_inst):
             "constraint_length": 0, "generators_octal": [], "binary_generators": [],
             "is_message_loaded": False, "original_message_length": 0, "padded_message_length": 0,
             "memory": [], "accumulated_output": [], "message_pointer": 0, "is_complete": True,
-            "puncturer_info": None, "predefined_puncturing_schemes_available": PREDEFINED_PUNCTURING_SCHEMES
-        }
+            "puncturer_info": None, 
+            "apply_puncturing_on_the_fly": True, # Default mode
+            "predefined_puncturing_schemes_available": PREDEFINED_PUNCTURING_SCHEMES        }
     
     padded_msg = enc_inst.get_current_message()
     punct_info = enc_inst.get_puncturer_info()
@@ -81,6 +82,7 @@ def get_current_encoder_state_dict(enc_inst):
         "message_pointer": enc_inst.get_current_message_pointer(),
         "is_complete": enc_inst.is_current_message_fully_encoded(),
         "puncturer_info": punct_info, # Will be None if no puncturer is set
+        "apply_puncturing_on_the_fly": enc_inst.get_puncturing_application_mode(),
         "predefined_puncturing_schemes_available": PREDEFINED_PUNCTURING_SCHEMES # Send available schemes to UI
     }
 
@@ -122,6 +124,26 @@ def get_initial_encoder_config():
     global encoder
     return jsonify(get_current_encoder_state_dict(encoder))
 
+# NEW Route for setting puncturing mode
+@app.route('/set_puncturing_mode', methods=['POST'])
+def set_puncturing_mode_route():
+    global encoder
+    if encoder is None:
+        return jsonify({"status": "error", "message": "Encoder not initialized."}), 400
+    
+    data = request.get_json()
+    on_the_fly = data.get('on_the_fly', True) # Default to on-the-fly
+    
+    try:
+        encoder.set_puncturing_application_mode(bool(on_the_fly))
+        return jsonify({
+            "status": "success",
+            "message": f"Puncturing application mode set to: {'on-the-fly' if on_the_fly else 'batch (at end)'}.",
+            "encoder_state": get_current_encoder_state_dict(encoder)
+        })
+    except Exception as e:
+        app.logger.error(f"Error setting puncturing mode: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/set_generator', methods=['POST'])
 def set_generator():
