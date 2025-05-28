@@ -21,18 +21,19 @@
         h1, h2, h3 { margin-top: 0; color: #333; }
         h3 { font-size: 1.1em; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom:10px; }
         label { display: block; margin-top: 10px; font-weight: bold; color: #555; }
-        input[type="text"], input[type="number"], textarea { width: calc(100% - 18px); padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
+        input[type="text"], input[type="number"], textarea, select { width: calc(100% - 18px); padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
         textarea { min-height: 60px; }
         button { padding: 10px 15px; margin-top: 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #0056b3; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         .error-message { color: red; font-weight: bold; margin-top:10px; }
-        #stepGeneratorCalculations div, .decoder-event-detail div { margin-left: 15px; border-left: 2px solid #eee; padding-left: 10px; margin-bottom:8px;}
+        #stepGeneratorCalculations div, .decoder-event-detail div, .encoder-event-detail div { margin-left: 15px; border-left: 2px solid #eee; padding-left: 10px; margin-bottom:8px;}
         .mono { font-family: "Courier New", Courier, monospace; background-color: #eef; padding: 2px 4px; border-radius: 3px; }
         .event-log-entry { border-bottom: 1px dashed #ddd; padding-bottom: 10px; margin-bottom: 10px; }
         .event-log-entry:last-child { border-bottom: none; }
         .flex-row { display: flex; align-items: center; gap: 10px; }
         .flex-row input[type="checkbox"] { margin-top: 0; }
+        .puncturing-info { margin-top: 10px; padding: 10px; background-color: #e9ecef; border-radius: 3px; border: 1px solid #ced4da;}
     </style>
 </head>
 <body>
@@ -50,11 +51,24 @@
                 <h2>Encoder Setup</h2>
                 <div>
                     <label for="constraintLength">Constraint Length (K):</label>
-                    <input type="number" id="constraintLength" value="3" min="2">
+                    <input type="number" id="constraintLength" value="7" min="1">
                 </div>
                 <div>
                     <label for="generators">Generators (octal, comma-separated):</label>
-                    <input type="text" id="generators" placeholder="e.g., 7,5">
+                    <input type="text" id="generators" value="171,133" placeholder="e.g., 7,5">
+                </div>
+                <div> 
+                    <label for="puncturingScheme">Puncturing Scheme:</label>
+                    <select id="puncturingScheme">
+                        <!-- Options will be populated by JS -->
+                    </select>
+                </div>
+                <div> 
+                    <label for="puncturingMode">Puncturing Application Mode:</label>
+                    <select id="puncturingMode">
+                        <option value="true" selected>On-the-fly (per step)</option>
+                        <option value="false">Batch (at end of message)</option>
+                    </select>
                 </div>
                 <div>
                     <label for="binaryMessage">Binary Message (0s and 1s):</label>
@@ -70,17 +84,22 @@
                 <p>Constraint Length (K): <span id="stateK" class="mono">N/A</span></p>
                 <p>Generators (Octal): <span id="stateGeneratorsOctal" class="mono">N/A</span></p>
                 <p>Generators (Binary): <span id="stateGeneratorsBinary" class="mono">N/A</span></p>
+                <div class="puncturing-info">
+                    Puncturing Active: <span id="statePuncturingActive" class="mono">No</span><br>
+                    Scheme: <span id="statePuncturingScheme" class="mono">N/A</span><br>
+                    Mode: <span id="statePuncturingMode" class="mono">On-the-fly</span>
+                </div>
                 <hr>
                 <p>Full Message (padded): <span id="stateLoadedMessage" class="mono">N/A</span></p>
                 <p>Input Bit Pointer: <span id="stateMessagePointer" class="mono">0</span> / <span id="stateMessageLength" class="mono">0</span></p>
-                <p>Current Memory: <span id="stateMemory" class="mono">N/A</span></emdash><span id="stateMemoryLabels" class="mono"></span></p>
+                <p>Current Memory: <span id="stateMemory" class="mono">N/A</span></p>
                 <p>Accumulated Output: <span id="stateAccumulatedOutput" class="mono">N/A</span></p>
                 <p>Encoding Complete: <span id="stateEncodingComplete" class="mono">No</span></p>
             </div>
         </div>
         <div class="step-output">
             <h2>Encoder: Last Step Details & Notifications</h2>
-            <div id="notifications"></div>
+            <div id="notifications" class="encoder-event-detail"></div>
         </div>
     </div>
 
@@ -121,7 +140,6 @@
                 <p>Traceback Complete: <span id="decoderStateTracebackComplete" class="mono">No</span></p>
                 <p>Final Decoded Message: <span id="decoderStateDecodedMessage" class="mono">N/A</span></p>
                 <p>Path Metrics (State 0): <span id="decoderStatePM0" class="mono">N/A</span></p>
-
             </div>
         </div>
         <div class="decoder-step-output">
@@ -129,6 +147,7 @@
             <div id="decoderNotifications"></div>
         </div>
     </div>
+
 
 <script>
     // --- Tab Handling ---
@@ -147,29 +166,31 @@
         document.getElementById(tabName).classList.add("active");
         evt.currentTarget.classList.add("active");
     }
-    document.addEventListener('DOMContentLoaded', () => {
-        document.querySelector('.tab-button.active').click(); 
-    });
-
+    
     // --- General Helper ---
     function formatPathMetric(value) {
-        if (value === null) return "Infinity"; // JSON null was float('inf')
+        if (value === null) return "Infinity";
         if (typeof value === 'number') return value.toFixed(2);
         return "N/A";
     }
 
-    // --- Encoder JS (Existing) ---
+    // --- Encoder JS ---
     const setGeneratorButton = document.getElementById('setGeneratorButton');
     const nextStepButton = document.getElementById('nextStepButton');
     const constraintLengthInput = document.getElementById('constraintLength');
     const binaryMessageInput = document.getElementById('binaryMessage');
     const generatorsInput = document.getElementById('generators');
+    const puncturingSchemeSelect = document.getElementById('puncturingScheme');
+    const puncturingModeSelect = document.getElementById('puncturingMode'); // Added
     const errorMessageDiv = document.getElementById('errorMessage');
     const notificationsDiv = document.getElementById('notifications');
 
     const stateK = document.getElementById('stateK');
     const stateGeneratorsOctal = document.getElementById('stateGeneratorsOctal');
     const stateGeneratorsBinary = document.getElementById('stateGeneratorsBinary');
+    const statePuncturingActive = document.getElementById('statePuncturingActive');
+    const statePuncturingScheme = document.getElementById('statePuncturingScheme');
+    const statePuncturingMode = document.getElementById('statePuncturingMode'); // Added
     const stateLoadedMessage = document.getElementById('stateLoadedMessage');
     const stateMessagePointer = document.getElementById('stateMessagePointer');
     const stateMessageLength = document.getElementById('stateMessageLength');
@@ -177,6 +198,7 @@
     const stateAccumulatedOutput = document.getElementById('stateAccumulatedOutput');
     const stateEncodingComplete = document.getElementById('stateEncodingComplete');
     let currentK_encoder = 0;
+    let predefinedPuncturingSchemes = {};
 
     function clearEncoderNotifications() {
         notificationsDiv.innerHTML = '';
@@ -197,38 +219,116 @@
       const safeMemoryArray = Array.isArray(memoryArray) ? memoryArray : [];
       if (kVal < 1) return "N/A";
       if (kVal === 1) return "[] (No memory cells for K=1)";
-      
       const memoryCells = kVal -1;
       if (memoryCells <= 0) return "[] (No memory cells)";
-
       let displayBits = safeMemoryArray.slice(0, memoryCells);
       if (displayBits.length < memoryCells) {
           displayBits = displayBits.concat(Array(memoryCells - displayBits.length).fill('?'));
       }
-      
       const labels = [];
       for (let i = 0; i < memoryCells; i++) {
           labels.push(`M<sub>${i}</sub>=${displayBits[i]}`);
       }
       return `[${displayBits.join('')}] (${labels.join(', ')})`;
     }
-    function updateEncoderStateDisplay(config, liveState) {
-        if (config) {
-            currentK_encoder = config.constraint_length;
-            stateK.textContent = config.constraint_length;
-            stateGeneratorsOctal.textContent = (config.generators_octal || []).join(', ');
-            stateGeneratorsBinary.innerHTML = (config.binary_generators || []).map(g => `<span class="mono">${g}</span>`).join('<br>');
-            stateLoadedMessage.textContent = 'N/A'; 
+
+    function updateEncoderStateDisplayFromServer(encoderState) {
+        if (!encoderState || !encoderState.is_initialized) {
+            stateK.textContent = 'N/A';
+            stateGeneratorsOctal.textContent = 'N/A';
+            stateGeneratorsBinary.innerHTML = 'N/A';
+            statePuncturingActive.textContent = 'No';
+            statePuncturingScheme.textContent = 'N/A';
+            statePuncturingMode.textContent = 'On-the-fly';
+            puncturingModeSelect.value = "true"; // Default
+            stateLoadedMessage.textContent = 'N/A';
+            stateMessagePointer.textContent = '0';
+            stateMessageLength.textContent = '0';
+            stateMemory.innerHTML = formatEncoderMemory([], 0);
+            stateAccumulatedOutput.textContent = '[]';
+            stateEncodingComplete.textContent = 'No';
+            nextStepButton.disabled = true;
+            // Ensure puncturing scheme dropdown reflects current state (might be NONE if encoder not fully init)
+            if (predefinedPuncturingSchemes && Object.keys(predefinedPuncturingSchemes).length > 0) {
+                 puncturingSchemeSelect.value = encoderState.puncturer_info ? 
+                    Object.keys(predefinedPuncturingSchemes).find(key => predefinedPuncturingSchemes[key].label === encoderState.puncturer_info.label) || "NONE" 
+                    : "NONE";
+            }
+            return;
         }
-        if (liveState) {
-            stateMemory.innerHTML = formatEncoderMemory(liveState.memory, currentK_encoder);
-            stateAccumulatedOutput.textContent = (liveState.accumulated_output || []).length > 0 ? (liveState.accumulated_output || []).join('') : '[]';
-            stateMessagePointer.textContent = liveState.message_pointer;
-            stateMessageLength.textContent = liveState.message_length || 0;
-            stateEncodingComplete.textContent = liveState.is_complete ? 'Yes' : 'No';
-            nextStepButton.disabled = liveState.is_complete;
+
+        currentK_encoder = encoderState.constraint_length;
+        stateK.textContent = encoderState.constraint_length;
+        stateGeneratorsOctal.textContent = (encoderState.generators_octal || []).join(', ');
+        stateGeneratorsBinary.innerHTML = (encoderState.binary_generators || []).map(g => `<span class="mono">${g}</span>`).join('<br>');
+        
+        if (encoderState.puncturer_info) {
+            statePuncturingActive.textContent = 'Yes';
+            statePuncturingScheme.textContent = encoderState.puncturer_info.label || 'Custom';
+             // Sync dropdown with current scheme from server state
+            const currentSchemeKey = Object.keys(predefinedPuncturingSchemes).find(key => 
+                predefinedPuncturingSchemes[key].label === encoderState.puncturer_info.label);
+            if (currentSchemeKey) {
+                puncturingSchemeSelect.value = currentSchemeKey;
+            } else if (encoderState.puncturer_info.label === "None (Rate 1/2)") { // Handle "NONE" specifically if label matches
+                 puncturingSchemeSelect.value = "NONE";
+            }
+
+        } else {
+            statePuncturingActive.textContent = 'No';
+            statePuncturingScheme.textContent = 'None';
+            puncturingSchemeSelect.value = "NONE"; // Default to NONE if no info
+        }
+        statePuncturingMode.textContent = encoderState.apply_puncturing_on_the_fly ? 'On-the-fly' : 'Batch (at end)';
+        puncturingModeSelect.value = String(encoderState.apply_puncturing_on_the_fly);
+
+
+        stateLoadedMessage.textContent = encoderState.is_message_loaded && encoderState.padded_message_length > 0 ? '(Message Loaded - see log)' : 'N/A';
+        stateMessagePointer.textContent = encoderState.message_pointer;
+        stateMessageLength.textContent = encoderState.padded_message_length || 0;
+        stateMemory.innerHTML = formatEncoderMemory(encoderState.memory, currentK_encoder);
+        stateAccumulatedOutput.textContent = (encoderState.accumulated_output || []).length > 0 ? (encoderState.accumulated_output || []).join('') : '[]';
+        stateEncodingComplete.textContent = encoderState.is_complete ? 'Yes' : 'No';
+        nextStepButton.disabled = !encoderState.is_initialized || !encoderState.is_message_loaded || encoderState.is_complete;
+    }
+
+    function populatePuncturingSchemes(schemes) {
+        puncturingSchemeSelect.innerHTML = ''; // Clear existing
+        if (!schemes || Object.keys(schemes).length === 0) {
+            const option = document.createElement('option');
+            option.value = "NONE"; // Fallback
+            option.textContent = "No Puncturing Schemes Loaded";
+            puncturingSchemeSelect.appendChild(option);
+            return;
+        }
+        for (const key in schemes) {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = schemes[key].label;
+            puncturingSchemeSelect.appendChild(option);
         }
     }
+    
+    async function fetchInitialEncoderConfig() {
+        try {
+            const response = await fetch('/get_initial_encoder_config');
+            if (!response.ok) {
+                showEncoderError(`Failed to load initial config: ${response.status}`);
+                populatePuncturingSchemes({}); // Show empty/error state in dropdown
+                updateEncoderStateDisplayFromServer(null); // Reset UI to default
+                return;
+            }
+            const data = await response.json();
+            predefinedPuncturingSchemes = data.predefined_puncturing_schemes_available || {};
+            populatePuncturingSchemes(predefinedPuncturingSchemes);
+            updateEncoderStateDisplayFromServer(data); 
+        } catch (error) {
+            showEncoderError('Network error loading initial config: ' + error.message);
+            populatePuncturingSchemes({});
+            updateEncoderStateDisplayFromServer(null);
+        }
+    }
+
     function displayEncoderEventDetails(eventData) {
         if (!eventData) return;
         const eventDiv = document.createElement('div');
@@ -236,15 +336,15 @@
         let content = `<h3>Event: ${eventData.type}</h3>`;
         switch (eventData.type) {
             case "MESSAGE_LOADED":
-                content += `<p class="mono">Message: ${(eventData.message_loaded || []).join('')} (Length: ${eventData.message_length || 0})</p>`;
-                stateLoadedMessage.textContent = (eventData.message_loaded || []).join('');
-                stateMessageLength.textContent = eventData.message_length || 0;
+                content += `<p class="mono">Message Loaded: ${(eventData.message_loaded || []).join('')} (Length: ${eventData.message_length || 0})</p>`;
+                content += `<p>Status: ${eventData.status}</p>`;
+                // stateLoadedMessage.textContent = (eventData.message_loaded || []).join(''); // Updated by server state
+                // stateMessageLength.textContent = eventData.message_length || 0;
                 break;
             case "ENCODE_STEP":
                 content += `<p><span class="mono">Input Bit: ${eventData.input_bit}</span></p>`;
                 content += `<p><span class="mono">Memory Before: ${formatEncoderMemory(eventData.memory_before, currentK_encoder)}</span></p>`;
-                content += `<p><span class="mono">Effective Register: [${(eventData.effective_register_contents || []).join(', ')}]</span></p>`;
-                content += `<h4>Generator Calculations:</h4><div id="stepGeneratorCalculations">`;
+                content += `<h4>Generator Calculations (Unpunctured):</h4><div id="stepGeneratorCalculations">`;
                 (eventData.generators_details || []).forEach((gen, idx) => {
                     content += `<div><strong>Generator ${idx + 1} ('${gen.generator_octal}' / '${gen.generator_binary}')</strong>`;
                     let xorTerms = (gen.involved_source_bits || []).map(src => src.value_tapped);
@@ -254,12 +354,38 @@
                     content += `<p class="mono">  Output Bit: ${gen.output_bit}</p></div>`;
                 });
                 content += `</div>`;
-                content += `<p><span class="mono">Output for this step: [${(eventData.output_bits_for_step || []).join(', ')}]</span></p>`;
+                content += `<p><span class="mono">Unpunctured Output for Step: [${(eventData.unpunctured_output_for_step || []).join(', ')}]</span></p>`;
+                if (eventData.is_puncturing_active) {
+                     if (eventData.puncturing_on_the_fly) {
+                        content += `<p class="mono">Punctured Output for Step: [${(eventData.punctured_output_for_step || []).join(', ')}]</span> (Matrix Idx: ${eventData.puncturer_period_index_before_step})</p>`;
+                    } else {
+                        content += `<p class="mono"> (Batch puncturing mode: output for this step not added to final buffer yet)</p>`;
+                    }
+                }
                 content += `<p><span class="mono">Memory After: ${formatEncoderMemory(eventData.memory_after, currentK_encoder)}</span></p>`;
                 break;
             case "ENCODING_COMPLETE":
-                content += `<p class="mono">Full Encoded Output: ${(eventData.full_encoded_output || []).join('')}</p>`;
+                content += `<p class="mono">Original Message Processed: ${(eventData.message_processed || []).join('')}</p>`;
+                if (eventData.is_puncturing_active && eventData.puncturing_details) {
+                    content += `<p class="mono">Puncturing Scheme: ${eventData.puncturing_details.label} (Mode: ${eventData.puncturing_on_the_fly ? 'On-the-fly' : 'Batch'})</p>`;
+                }
+                content += `<p class="mono">Full Encoded Output (Final): ${(eventData.full_encoded_output || []).join('')}</p>`;
+                if (eventData.full_unpunctured_output_pairs) {
+                     content += `<p class="mono">Full Unpunctured Output Pairs: ${JSON.stringify(eventData.full_unpunctured_output_pairs)}</p>`;
+                }
                 showEncoderNotification("Encoding complete!", "success");
+                break;
+            case "PUNCTURER_CONFIG_CHANGED":
+                content += `<p>Puncturing Active: <span class="mono">${eventData.active ? 'Yes' : 'No'}</span></p>`;
+                content += `<p>Scheme: <span class="mono">${eventData.scheme_label}</span></p>`;
+                if (eventData.puncturing_matrix) {
+                    content += `<p class="mono">Matrix: ${JSON.stringify(eventData.puncturing_matrix)}</p>`;
+                }
+                showEncoderNotification(`Puncturing scheme changed to ${eventData.scheme_label}.`, "info");
+                break;
+             case "PUNCTURING_MODE_CHANGED": // Event from backend if you add one
+                content += `<p>Puncturing Mode changed to: <span class="mono">${eventData.on_the_fly ? 'On-the-fly' : 'Batch'}</span></p>`;
+                showEncoderNotification(`Puncturing mode changed.`, "info");
                 break;
             case "ENCODER_RESET": content += `<p>Status: ${eventData.status}</p>`; break;
             default: content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
@@ -267,6 +393,53 @@
         eventDiv.innerHTML = content;
         notificationsDiv.prepend(eventDiv);
     }
+
+    puncturingSchemeSelect.addEventListener('change', async (event) => {
+        const schemeKey = event.target.value;
+        errorMessageDiv.textContent = '';
+        try {
+            const response = await fetch('/set_puncturing', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ puncturing_scheme_key: schemeKey })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                showEncoderError(data.message || `Error: ${response.status}`);
+            } else {
+                showEncoderNotification(data.message, "success");
+            }
+            if(data.event) displayEncoderEventDetails(data.event);
+            if(data.encoder_state) updateEncoderStateDisplayFromServer(data.encoder_state);
+
+        } catch (error) {
+            showEncoderError('Network error setting puncturer: ' + error.message);
+        }
+    });
+
+    puncturingModeSelect.addEventListener('change', async (event) => {
+        const onTheFly = event.target.value === 'true';
+        errorMessageDiv.textContent = '';
+        try {
+            const response = await fetch('/set_puncturing_mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ on_the_fly: onTheFly })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                showEncoderError(data.message || `Error: ${response.status}`);
+            } else {
+                showEncoderNotification(data.message, "success");
+            }
+            // Backend could optionally fire a PUNCTURING_MODE_CHANGED event
+            // if(data.event) displayEncoderEventDetails(data.event);
+            if (data.encoder_state) updateEncoderStateDisplayFromServer(data.encoder_state);
+        } catch (error) {
+            showEncoderError('Network error setting puncturing mode: ' + error.message);
+        }
+    });
+
 
     setGeneratorButton.addEventListener('click', async () => {
         clearEncoderNotifications();
@@ -288,23 +461,16 @@
             const data = await response.json();
             if (!response.ok) {
                 showEncoderError(data.message || `Error: ${response.status}`);
-                nextStepButton.disabled = true; return;
+                if(data.encoder_state) updateEncoderStateDisplayFromServer(data.encoder_state);
+                else fetchInitialEncoderConfig();
+                return;
             }
             showEncoderNotification(data.message, "success");
-            updateEncoderStateDisplay(data.config, null);
             if (data.initial_event) { displayEncoderEventDetails(data.initial_event); }
-            
-            const initialMemory = data.config.constraint_length > 1 ? Array(data.config.constraint_length - 1).fill(0) : [];
-            updateEncoderStateDisplay(null, {
-                 memory: initialMemory,
-                 accumulated_output: [],
-                 message_pointer: 0,
-                 message_length: data.config.padded_message_length,
-                 is_complete: data.config.padded_message_length === 0
-            });
-            nextStepButton.disabled = (data.config.padded_message_length === 0);
-
-        } catch (error) { showEncoderError('Network error: ' + error.message); nextStepButton.disabled = true; }
+            if (data.encoder_state) {
+                 updateEncoderStateDisplayFromServer(data.encoder_state);
+            }
+        } catch (error) { showEncoderError('Network error: ' + error.message); fetchInitialEncoderConfig(); }
     });
 
     nextStepButton.addEventListener('click', async () => {
@@ -312,18 +478,17 @@
         try {
             const response = await fetch('/next_step', { method: 'POST' });
             const data = await response.json();
-            if (!response.ok) { showEncoderError(data.message || `Error: ${response.status}`); return; }
-            
-            if (data.details_from_method) { showEncoderNotification(`Status: ${data.status_from_method} - ${data.details_from_method}`); }
+            if (!response.ok) { 
+                showEncoderError(data.message || `Error: ${response.status}`);
+            } else {
+                if (data.details_from_method) { showEncoderNotification(`Status: ${data.status_from_method} - ${data.details_from_method}`); }
+            }
             if (data.primary_event) { displayEncoderEventDetails(data.primary_event); }
-            if (data.encoder_state_after_step) { updateEncoderStateDisplay(null, data.encoder_state_after_step); }
+            if (data.encoder_state) { updateEncoderStateDisplayFromServer(data.encoder_state); }
             
         } catch (error) { showEncoderError('Network error: ' + error.message); }
     });
-    updateEncoderStateDisplay(null, { memory: [], accumulated_output: [], message_pointer: 0, message_length: 0, is_complete: true });
-    nextStepButton.disabled = true;
-
-
+    
     // --- Decoder JS ---
     const loadSequenceButton = document.getElementById('loadSequenceButton');
     const nextAcsStepButton = document.getElementById('nextAcsStepButton');
@@ -347,7 +512,6 @@
     const decoderStateDecodedMessage = document.getElementById('decoderStateDecodedMessage');
     const decoderStatePM0 = document.getElementById('decoderStatePM0');
 
-
     function clearDecoderNotifications() {
         decoderNotificationsDiv.innerHTML = '';
         decoderErrorMessageDiv.textContent = '';
@@ -367,29 +531,24 @@
 
     function updateDecoderUIFromState(state) {
         if (!state) return;
-
         if (state.fixed_params) {
             decoderStateK.textContent = state.fixed_params.K;
             decoderStateGenerators.textContent = state.fixed_params.G_octal.join(', ');
             decoderStateNumStates.textContent = state.fixed_params.num_states;
         }
-
         decoderStateSeqLoaded.textContent = state.is_sequence_loaded ? 'Yes' : 'No';
         decoderStateNumOrigBits.textContent = state.is_sequence_loaded ? state.num_original_message_bits : 'N/A';
         decoderStateCurrentStage.textContent = state.current_trellis_stage_idx;
         decoderStateTotalStages.textContent = state.T_stages_total;
         decoderStateAcsComplete.textContent = state.is_acs_complete ? 'Yes' : 'No';
         decoderStateTracebackComplete.textContent = state.is_traceback_complete ? 'Yes' : 'No';
-        
         const decodedMsg = state.decoded_message_final || [];
         decoderStateDecodedMessage.textContent = state.is_traceback_complete ? (decodedMsg.length > 0 ? decodedMsg.join('') : '[] (empty)') : 'N/A';
-        
         const pm = state.path_metrics || [];
         decoderStatePM0.textContent = (pm.length > 0) ? formatPathMetric(pm[0]) : 'N/A';
-
         loadSequenceButton.disabled = false;
         nextAcsStepButton.disabled = !(state.is_sequence_loaded && !state.is_acs_complete && state.T_stages_total > 0);
-        performTracebackButton.disabled = !(state.is_sequence_loaded && state.is_acs_complete && state.T_stages_total > 0); // Allow re-traceback
+        performTracebackButton.disabled = !(state.is_sequence_loaded && state.is_acs_complete && state.T_stages_total > 0);
         resetDecoderButton.disabled = false;
     }
     
@@ -398,42 +557,36 @@
         const eventDiv = document.createElement('div');
         eventDiv.className = 'event-log-entry decoder-event-detail';
         let content = `<h3>Event: ${eventData.type}</h3>`;
-
         switch (eventData.type) {
-            case "DECODER_RESET":
-                content += `<p>${eventData.status}</p>`;
-                break;
+            case "DECODER_RESET": content += `<p>${eventData.status}</p>`; break;
             case "DECODER_RECEIVED_SEQUENCE_LOADED":
                 content += `<p class="mono">Sequence Loaded: ${(eventData.sequence_loaded || []).join('') || '[]'}</p>`;
-                content += `<p>Original Message Bits: ${eventData.num_original_bits}</p>`;
-                content += `<p>Total Trellis Stages: ${eventData.total_stages}</p>`;
+                content += `<p>Original Bits: ${eventData.num_original_bits}, Total Stages: ${eventData.total_stages}</p>`;
                 if (eventData.initial_path_metrics && eventData.initial_path_metrics.length > 0) {
-                     content += `<p class="mono">Initial Path Metric (State 0): ${formatPathMetric(eventData.initial_path_metrics[0])}</p>`;
+                     content += `<p class="mono">Initial PM (S0): ${formatPathMetric(eventData.initial_path_metrics[0])}</p>`;
                 }
                 break;
             case "DECODER_ACS_STEP":
-                content += `<p>Processed Trellis Stage: ${eventData.stage_processed_idx}</p>`;
-                content += `<p class="mono">Received Pair for Stage: [${(eventData.received_pair_for_stage || []).join(',')}]</p>`;
+                content += `<p>Processed Stage: ${eventData.stage_processed_idx}, Received: [${(eventData.received_pair_for_stage || []).join(',')}]</p>`;
                 if (eventData.path_metrics_at_stage_end && eventData.path_metrics_at_stage_end.length > 0) {
-                    content += `<p class="mono">Path Metric (State 0) after step: ${formatPathMetric(eventData.path_metrics_at_stage_end[0])}</p>`;
+                    content += `<p class="mono">PM (S0) after: ${formatPathMetric(eventData.path_metrics_at_stage_end[0])}</p>`;
                 }
-                 content += `<p><small>Full PMs and pointers for this step were logged to browser console.</small></p>`;
-                 console.log("DECODER_ACS_STEP Event Data:", JSON.parse(JSON.stringify(eventData))); // Deep copy for console
+                 content += `<p><small>Full PMs/pointers in console.</small></p>`;
+                 console.log("DECODER_ACS_STEP:", JSON.parse(JSON.stringify(eventData)));
                 break;
             case "DECODER_ACS_COMPLETE":
-                content += `<p>ACS completed after ${eventData.total_stages_processed} stages.</p>`;
+                content += `<p>ACS complete after ${eventData.total_stages_processed} stages.</p>`;
                 if (eventData.final_path_metrics_at_T && eventData.final_path_metrics_at_T.length > 0) {
-                    content += `<p class="mono">Final Path Metric (State 0): ${formatPathMetric(eventData.final_path_metrics_at_T[0])}</p>`;
+                    content += `<p class="mono">Final PM (S0): ${formatPathMetric(eventData.final_path_metrics_at_T[0])}</p>`;
                 }
                 break;
             case "DECODER_TRACEBACK_COMPLETE":
-                content += `<p class="mono">Decoded Message: ${(eventData.decoded_message || []).join('') || '[]'}</p>`;
+                content += `<p class="mono">Decoded: ${(eventData.decoded_message || []).join('') || '[]'}</p>`;
                 if (eventData.full_decoded_sequence_with_tail) {
-                    content += `<p class="mono">Full Decoded (incl. tail): ${eventData.full_decoded_sequence_with_tail.join('')}</p>`;
+                    content += `<p class="mono">Full (w/ tail): ${eventData.full_decoded_sequence_with_tail.join('')}</p>`;
                 }
                 break;
-            default:
-                content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
+            default: content += `<pre>${JSON.stringify(eventData, null, 2)}</pre>`;
         }
         eventDiv.innerHTML = content;
         decoderNotificationsDiv.prepend(eventDiv);
@@ -443,126 +596,80 @@
         clearDecoderNotifications();
         const sequenceStr = receivedSequenceInput.value;
         const numOrigBits = numOriginalBitsInput.value;
-
-        if (!sequenceStr.trim()) {
-            showDecoderError("Received sequence cannot be empty."); return;
+        if (!sequenceStr.trim()) { showDecoderError("Received sequence cannot be empty."); return; }
+        if (!/^[01,\s]*$/.test(sequenceStr)) { showDecoderError("Sequence must be 0s, 1s, commas, spaces."); return; }
+        const cleanedSequence = sequenceStr.replace(/[^01]/g, "");
+        if (cleanedSequence.length % 2 !== 0) { 
+             showDecoderError("Decoder expects unpunctured sequence (length multiple of 2)."); return;
         }
-        if (!/^[01,\s]*$/.test(sequenceStr)) {
-            showDecoderError("Received sequence must contain only 0s, 1s, commas, or spaces."); return;
-        }
-        const cleanedSequence = sequenceStr.replace(/[^01]/g, ""); // Remove spaces and commas
-        if (cleanedSequence.length % 2 !== 0) {
-            showDecoderError("Received sequence length (after removing spaces/commas) must be a multiple of 2."); return;
-        }
-        if (parseInt(numOrigBits) < 0) {
-             showDecoderError("Number of original message bits cannot be negative."); return;
-        }
+        if (parseInt(numOrigBits) < 0) { showDecoderError("Original bits count non-negative."); return; }
         
         try {
             const response = await fetch('/decoder/load_sequence', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    received_sequence: cleanedSequence, // Send cleaned sequence
-                    num_original_message_bits: parseInt(numOrigBits)
-                }),
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ received_sequence: cleanedSequence, num_original_message_bits: parseInt(numOrigBits) }),
             });
-            const data = await response.json(); // This is where the "Unexpected token 'I'" error occurred
-            if (!response.ok) {
-                showDecoderError(data.message || `Error: ${response.status}`);
-            } else {
-                showDecoderNotification(data.message || "Sequence processed.", data.status === "success" ? "success" : "info");
-            }
+            const data = await response.json(); 
+            if (!response.ok) { showDecoderError(data.message || `Error: ${response.status}`); }
+            else { showDecoderNotification(data.message || "Sequence processed.", data.status === "success" ? "success" : "info"); }
             if (data.event) displayDecoderEventDetails(data.event);
             if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
-
-        } catch (error) { 
-            console.error("Fetch error in loadSequenceButton:", error);
-            showDecoderError('Network or client-side parsing error: ' + error.message); 
-        }
+        } catch (error) { console.error("Err LdSeq:", error); showDecoderError('Client/Net parse err: ' + error.message); }
     });
-
-    nextAcsStepButton.addEventListener('click', async () => {
+    nextAcsStepButton.addEventListener('click', async () => { 
         decoderErrorMessageDiv.textContent = ''; 
         try {
             const response = await fetch('/decoder/next_acs_step', { method: 'POST' });
             const data = await response.json();
-
-            if (!response.ok && response.status !== 200) { 
-                 showDecoderError(data.message || `Error: ${response.status}`);
-            } else {
-                 showDecoderNotification(data.message || "ACS Step processed.", (data.status === "success" || data.status === "acs_step_processed" || data.status === "acs_complete" || response.status === 200) ? "info" : "success");
-            }
+            if (!response.ok && response.status !== 200) { showDecoderError(data.message || `Error: ${response.status}`); }
+            else { showDecoderNotification(data.message || "ACS Step processed.", (data.status === "success" || data.status === "acs_step_processed" || data.status === "acs_complete" || response.status === 200) ? "info" : "success");}
             if (data.event) displayDecoderEventDetails(data.event);
             if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
-
-        } catch (error) { 
-            console.error("Fetch error in nextAcsStepButton:", error);
-            showDecoderError('Network or client-side parsing error: ' + error.message); 
-        }
+        } catch (error) { console.error("Err NxtAcs:", error); showDecoderError('Client/Net parse err: ' + error.message); }
     });
-    
     performTracebackButton.addEventListener('click', async () => {
         decoderErrorMessageDiv.textContent = '';
         const assumeZero = assumeZeroTerminatedCheckbox.checked;
         try {
             const response = await fetch('/decoder/perform_traceback', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ assume_zero_terminated: assumeZero }),
             });
             const data = await response.json();
-            if (!response.ok && response.status !== 200) {
-                 showDecoderError(data.message || `Error: ${response.status}`);
-            } else {
-                 showDecoderNotification(data.message || "Traceback processed.", data.status === "success" || response.status === 200 ? "success" : "info");
-            }
+            if (!response.ok && response.status !== 200) { showDecoderError(data.message || `Error: ${response.status}`);}
+            else { showDecoderNotification(data.message || "Traceback processed.", data.status === "success" || response.status === 200 ? "success" : "info");}
             if (data.event) displayDecoderEventDetails(data.event);
             if (data.decoder_state) updateDecoderUIFromState(data.decoder_state);
-
-        } catch (error) { 
-            console.error("Fetch error in performTracebackButton:", error);
-            showDecoderError('Network or client-side parsing error: ' + error.message); 
-        }
+        } catch (error) { console.error("Err TrcBack:", error); showDecoderError('Client/Net parse err: ' + error.message); }
     });
-
     resetDecoderButton.addEventListener('click', async () => {
         clearDecoderNotifications();
         try {
             const response = await fetch('/decoder/reset', { method: 'POST' });
             const data = await response.json();
-            if (!response.ok) {
-                 showDecoderError(data.message || `Error: ${response.status}`);
-            } else {
-                showDecoderNotification(data.message || "Decoder reset.", "success");
-            }
+            if (!response.ok) { showDecoderError(data.message || `Error: ${response.status}`); }
+            else { showDecoderNotification(data.message || "Decoder reset.", "success"); }
             if (data.event) displayDecoderEventDetails(data.event);
-            if (data.decoder_state) {
-                updateDecoderUIFromState(data.decoder_state);
-            } else { 
-                const defaultNumStates = 64;
-                updateDecoderUIFromState({
-                    is_sequence_loaded: false, current_trellis_stage_idx: 0, T_stages_total: 0,
-                    is_acs_complete: false, is_traceback_complete: false,
-                    path_metrics: [0.0].concat(Array(defaultNumStates - 1).fill(null)), // Use null for Infinity
-                    decoded_message_final: [], num_original_message_bits: 0,
-                    fixed_params: { K: 7, G_octal: ["171", "133"], num_states: defaultNumStates }
-                });
+            if (data.decoder_state) { updateDecoderUIFromState(data.decoder_state); }
+            else { 
+                const dfltNumSt = 64;
+                updateDecoderUIFromState({is_sequence_loaded:false,current_trellis_stage_idx:0,T_stages_total:0,is_acs_complete:false,is_traceback_complete:false,path_metrics:[0.0].concat(Array(dfltNumSt-1).fill(null)),decoded_message_final:[],num_original_message_bits:0,fixed_params:{K:7,G_octal:["171","133"],num_states:dfltNumSt}});
             }
-        } catch (error) { 
-            console.error("Fetch error in resetDecoderButton:", error);
-            showDecoderError('Network or client-side parsing error: ' + error.message); 
-        }
+        } catch (error) { console.error("Err RstDec:", error); showDecoderError('Client/Net parse err: ' + error.message); }
     });
 
-    // Initial Decoder UI state
-    const initialDecoderNumStates = 64;
-    updateDecoderUIFromState({
-        is_sequence_loaded: false, current_trellis_stage_idx: 0, T_stages_total: 0,
-        is_acs_complete: false, is_traceback_complete: false,
-        path_metrics: [0.0].concat(Array(initialDecoderNumStates - 1).fill(null)), // Use null for Infinity
-        decoded_message_final: [], num_original_message_bits: 0,
-        fixed_params: { K: 7, G_octal: ["171", "133"], num_states: initialDecoderNumStates }
+    // --- Initial Page Load ---
+    document.addEventListener('DOMContentLoaded', () => {
+        fetchInitialEncoderConfig();
+        const initialDecoderNumStates = 64;
+        updateDecoderUIFromState({
+            is_sequence_loaded:false, current_trellis_stage_idx:0, T_stages_total:0,
+            is_acs_complete:false, is_traceback_complete:false,
+            path_metrics:[0.0].concat(Array(initialDecoderNumStates - 1).fill(null)),
+            decoded_message_final:[], num_original_message_bits:0,
+            fixed_params:{ K:7, G_octal:["171", "133"], num_states:initialDecoderNumStates }
+        });
+        document.querySelector('.tab-button.active').click(); 
     });
 
 </script>

@@ -8,26 +8,57 @@ This application implements a simple convolutional encoder and Viterbi decoder u
 
 ## Features
 
-*   **Web Interface:** User-friendly interface built with Flask.
-*   **Convolutional Encoding:** Encodes a user-provided binary string.
-    *   Uses a fixed constraint length (K) and generator polynomials (as detailed in the backend code, e.g., K=7, G=["171", "133"] for a rate 1/2 code).
-*   **Noise Simulation (Conceptual):** The UI allows for displaying a "received/noisy" version, though actual noise addition logic might be manual or a placeholder for future implementation.
-*   **Viterbi Decoding:** Decodes the received (potentially noisy) sequence to recover the original message.
-    *   Tailored to the specific encoder parameters.
-*   **Clear Output:** Displays the original input, encoded output, received/noisy output, and the final decoded output.
-*   **Success/Failure Indication:** Shows whether the decoded message matches the original input.
+*   **Web Interface:** User-friendly interface built with Flask, featuring separate tabs for Encoder and Viterbi Decoder operations.
+*   **Convolutional Encoding (with Puncturing):**
+    *   Encodes a user-provided binary string.
+    *   **Configurable Parameters:** Allows setting constraint length (K) and generator polynomials (octal).
+    *   **Puncturing Support:**
+        *   Offers selection from predefined puncturing schemes (e.g., Rate 1/2 (None), 2/3, 3/4, 4/5, 5/6, 7/8) compatible with a rate 1/2 mother code.
+        *   Supports two puncturing application modes:
+            *   **On-the-fly:** Puncturing is applied to each symbol as it's generated.
+            *   **Batch (at end):** The entire message is encoded first (unpunctured), and then puncturing is applied to the complete block of unpunctured symbols.
+        *   UI clearly indicates the active puncturing scheme and mode.
+    *   **Step-by-Step Operation:** Allows users to process the input message bit by bit.
+        *   Displays current memory state, input bit, effective register contents.
+        *   Shows detailed calculation for each generator.
+        *   Clearly distinguishes between *unpunctured output* for the step and the *punctured bits* (if any) added to the final stream.
+        *   Live updates of the accumulated (potentially punctured) output.
+    *   **Event Logging:** Provides detailed event notifications for message loading, each encoding step (including puncturing details), puncturer configuration changes, and encoding completion.
+*   **Viterbi Decoding:**
+    *   Decodes a received binary sequence to recover the original message.
+    *   **Fixed Parameters:** Tailored for a rate 1/2 mother code with K=7, Generators "171", "133" (octal). (Note: This decoder expects an *unpunctured* input stream corresponding to this mother code).
+    *   **Step-by-Step Operation:**
+        *   **Load Sequence:** Accepts received sequence and number of original message bits.
+        *   **ACS Phase Visualization:** Step through Add-Compare-Select stages, with UI updates for current stage, path metrics (summary for State 0, full details in console), and event logs.
+        *   **Traceback Phase:** Execute traceback with option for "Assume Zero Terminated," displaying the final decoded message.
+    *   **Live State Display:** Shows if sequence is loaded, trellis progress, ACS/Traceback completion status.
+    *   **Event Logging:** Detailed events for decoder reset, sequence loading, ACS steps, and traceback.
+*   **Noise Simulation (Conceptual):** The overall application structure allows for future integration of a noise channel between the encoder output and decoder input (currently a manual step if desired).
+*   **Clear Output Comparison (Conceptual):** While not a direct feature of the step-by-step tools, the separate encoder/decoder allows users to encode, (manually transfer/modify for noise), and then decode, facilitating comparison of original vs. decoded.
 
-![Decoder Screenshot](decoderImage.jpg)
-*   **DECODER** Dedicated section in `index.html` for decoder controls and output.
-*   **Sequence Loading:** Input for received sequence and number of original message bits.
-*   **Stepwise ACS:** Button to advance through Add-Compare-Select stages one at a time.
-    *   *Live state updates* for current stage, total stages, and path metrics (summary).
-    *   *Detailed event logging* in the UI and browser console.
-*   **Traceback:** Button to perform traceback, with an option to assume zero-termination.
-    *   Displays the *final decoded message*.
-*   **State Management:** Backend Flask routes (`/decoder/*`) to handle decoder logic and state.
-*   **Event System:** Decoder backend (`ViterbiDecoderK7G171_133_Stepwise`) emits events captured by Flask and sent to the UI.
-*   **JSON `Infinity` Fix:** Resolved issue with `float('inf')` in path metrics breaking client-side JSON parsing.
+---
+
+## Screenshots
+
+### Encoder Tab with Puncturing
+
+The Encoder tab allows users to configure the convolutional encoder, including setting the constraint length, generator polynomials, and a binary message. Crucially, it now features controls for selecting a **Puncturing Scheme** (e.g., "Rate 2/3") and a **Puncturing Application Mode** ("On-the-fly" or "Batch"). The "Live State" section reflects these settings, and the "Last Step Details" provide insights into both unpunctured and punctured outputs during step-by-step encoding.
+
+![Encoder with Puncturing UI](puncturing.jpg) 
+
+---
+
+### Viterbi Decoder Tab in Action
+
+The Viterbi Decoder tab is designed for step-by-step decoding of (unpunctured) received sequences for the fixed K=7, G=["171","133"] code. Users can load a sequence, step through the ACS (Add-Compare-Select) phase stage by stage observing path metric updates, and finally perform traceback to get the decoded message. The image below shows an example of the decoder mid-operation.
+
+![Viterbi Decoder UI](decoderImage.jpg) 
+
+
+### Also it can offer debug events to the user
+
+![Debug Events UI](events.jpg) 
+
 
 
 ## Prerequisites

@@ -1,68 +1,99 @@
 import os
 import json
-import math # Required for math.isinf and float('inf')
+import math
 
 from flask import Flask, send_file, request, jsonify
 
+# Assuming these are correctly placed and updated
 from src.quantum.quantum_encoder import ConvolutionalEncoder
 from src.quantum.quantum_decoder import ViterbiDecoderK7G171_133_Stepwise
+from src.quantum.puncturer import PREDEFINED_PUNCTURING_SCHEMES # Import predefined schemes
 
 
 app = Flask(__name__)
 
 # --- Encoder Globals ---
-encoder = None
+encoder = None # Will be initialized by set_generator
 all_encoder_events = []
-
-def flask_encoder_listener(event_data):
-    global all_encoder_events
-    all_encoder_events.append(event_data)
 
 # --- Decoder Globals ---
 viterbi_decoder_instance = None
 all_decoder_events = []
 
-# Helper to sanitize lists with float('inf') for JSON
+# --- Helper to get or create encoder instance ---
+def get_or_create_encoder(constraint_length=None, generators_octal=None):
+    global encoder
+    if encoder is None:
+        if constraint_length is None or generators_octal is None:
+            # Default or raise error if essential params missing for first creation
+            # For now, let's assume set_generator is called first
+            raise ValueError("Encoder must be initialized via /set_generator first if not already existing.")
+        encoder = ConvolutionalEncoder(constraint_length=constraint_length, generators_octal=generators_octal)
+        encoder.add_listener(flask_encoder_listener)
+    # If K or G changes, we should re-initialize. set_generator route handles this.
+    return encoder
+
+# --- Listeners (Unchanged) ---
+def flask_encoder_listener(event_data):
+    global all_encoder_events
+    # Sanitize known path metrics fields IF encoder ever emits them (unlikely for current encoder)
+    # This is more relevant for the decoder listener.
+    all_encoder_events.append(event_data)
+
 def sanitize_path_metrics_for_json(metrics_list):
-    if metrics_list is None:
-        return None
-    # Replace float('inf') with None, which becomes JSON null
-    # Also handle float('-inf') if it could ever occur, though unlikely for path metrics
-    return [
-        None if m is not None and (math.isinf(m) or math.isnan(m)) else m 
-        for m in metrics_list
-    ]
+    if metrics_list is None: return None
+    return [None if m is not None and (math.isinf(m) or math.isnan(m)) else m for m in metrics_list]
 
 def flask_decoder_listener(event_data):
     global all_decoder_events
-    
-    # Sanitize known path metrics fields in event_data
-    # These are the keys used in ViterbiDecoderK7G171_133_Stepwise events
     for key in ['initial_path_metrics', 'path_metrics_at_stage_start', 
                 'path_metrics_at_stage_end', 'final_path_metrics_at_T']:
         if key in event_data and event_data[key] is not None:
             event_data[key] = sanitize_path_metrics_for_json(event_data[key])
-            
     all_decoder_events.append(event_data)
 
 
-def get_or_create_decoder():
-    global viterbi_decoder_instance
-    # Removed all_decoder_events clearing from here, routes handle it.
-    if viterbi_decoder_instance is None:
-        viterbi_decoder_instance = ViterbiDecoderK7G171_133_Stepwise()
-        viterbi_decoder_instance.add_listener(flask_decoder_listener)
-    return viterbi_decoder_instance
+# --- State Dictionary Functions ---
+def get_current_encoder_state_dict(enc_inst):
+    if not enc_inst:
+        return {
+            "is_initialized": False,
+            "constraint_length": 0, "generators_octal": [], "binary_generators": [],
+            "is_message_loaded": False, "original_message_length": 0, "padded_message_length": 0,
+            "memory": [], "accumulated_output": [], "message_pointer": 0, "is_complete": True,
+            "puncturer_info": None, 
+            "apply_puncturing_on_the_fly": True, # Default mode
+            "predefined_puncturing_schemes_available": PREDEFINED_PUNCTURING_SCHEMES        }
+    
+    padded_msg = enc_inst.get_current_message()
+    punct_info = enc_inst.get_puncturer_info()
 
-def get_current_decoder_state_dict(decoder_inst):
+    return {
+        "is_initialized": True,
+        "constraint_length": enc_inst.constraint_length,
+        "generators_octal": enc_inst.generators_octal,
+        "binary_generators": [''.join(map(str,bg)) for bg in enc_inst.binary_generators],
+        "is_message_loaded": enc_inst.is_message_loaded,
+        "original_message_length": 0, # This was specific to set_generator, not stored in encoder directly.
+                                      # We can infer padded_message_length if needed.
+        "padded_message_length": len(padded_msg) if padded_msg else 0,
+        "memory": enc_inst.get_current_memory(),
+        "accumulated_output": enc_inst.get_current_encoded_data(), # This is now the (potentially) punctured output
+        "message_pointer": enc_inst.get_current_message_pointer(),
+        "is_complete": enc_inst.is_current_message_fully_encoded(),
+        "puncturer_info": punct_info, # Will be None if no puncturer is set
+        "apply_puncturing_on_the_fly": enc_inst.get_puncturing_application_mode(),
+        "predefined_puncturing_schemes_available": PREDEFINED_PUNCTURING_SCHEMES # Send available schemes to UI
+    }
+
+def get_current_decoder_state_dict(decoder_inst): # Unchanged from previous version
     if not decoder_inst:
-        default_num_states = 64 # K=7 -> 2^(7-1) states
+        default_num_states = 64
         return {
             "is_sequence_loaded": False, "current_trellis_stage_idx": 0, "T_stages_total": 0,
             "is_acs_complete": False, "is_traceback_complete": False,
             "path_metrics": sanitize_path_metrics_for_json([0.0] + [float('inf')] * (default_num_states - 1)),
-            "decoded_message_final": [],
-            "num_original_message_bits": 0,
+            "decoded_message_final": [], "num_original_message_bits": 0,
             "fixed_params": {"K": 7, "G_octal": ["171", "133"], "num_states": default_num_states}
         }
     return {
@@ -75,33 +106,62 @@ def get_current_decoder_state_dict(decoder_inst):
         "decoded_message_final": list(decoder_inst.decoded_message_final),
         "num_original_message_bits": decoder_inst.num_original_message_bits,
         "fixed_params": {
-            "K": decoder_inst.constraint_length,
-            "G_octal": decoder_inst.generators_octal,
+            "K": decoder_inst.constraint_length, "G_octal": decoder_inst.generators_octal,
             "num_states": decoder_inst.num_states
         }
     }
 
+# --- Routes ---
 @app.route("/")
 def index():
     return send_file('src/index.html')
 
-# --- Encoder Routes (existing - unchanged) ---
+@app.route('/get_initial_encoder_config', methods=['GET'])
+def get_initial_encoder_config():
+    # This route can provide predefined puncturing schemes to the UI on load
+    # and current encoder state if one exists from a previous session (not implemented here)
+    # For now, just returns schemes and a default uninitialized state
+    global encoder
+    return jsonify(get_current_encoder_state_dict(encoder))
+
+# NEW Route for setting puncturing mode
+@app.route('/set_puncturing_mode', methods=['POST'])
+def set_puncturing_mode_route():
+    global encoder
+    if encoder is None:
+        return jsonify({"status": "error", "message": "Encoder not initialized."}), 400
+    
+    data = request.get_json()
+    on_the_fly = data.get('on_the_fly', True) # Default to on-the-fly
+    
+    try:
+        encoder.set_puncturing_application_mode(bool(on_the_fly))
+        return jsonify({
+            "status": "success",
+            "message": f"Puncturing application mode set to: {'on-the-fly' if on_the_fly else 'batch (at end)'}.",
+            "encoder_state": get_current_encoder_state_dict(encoder)
+        })
+    except Exception as e:
+        app.logger.error(f"Error setting puncturing mode: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/set_generator', methods=['POST'])
 def set_generator():
     global encoder, all_encoder_events
     data = request.get_json()
-
+    # ... (validation for K, generators, message as before) ...
     generators_str = data.get('generators', '')
     message_str = data.get('message', '')
     try:
         constraint_length = int(data.get('constraint_length', 3))
+        if constraint_length < 1: raise ValueError("K must be >= 1")
     except ValueError:
-        return jsonify({"status": "error", "message": "Invalid Constraint Length (K). Must be an integer."}), 400
+        return jsonify({"status": "error", "message": "Invalid Constraint Length (K)."}), 400
 
     try:
         generators = [g.strip() for g in generators_str.split(',') if g.strip()]
-        if not generators:
-            raise ValueError("Generators cannot be empty.")
+        if not generators: raise ValueError("Generators cannot be empty.")
+        # Further validation of octal format happens in Encoder init
 
         parsed_message_bits = []
         if message_str.strip():
@@ -111,68 +171,126 @@ def set_generator():
             parsed_message_bits = [int(bit) for bit in raw_bits]
 
         message_to_encode_padded = list(parsed_message_bits)
-        if constraint_length > 1:
+        if constraint_length > 1: # K=1 has no memory, no padding needed for flushing
             padding_length = constraint_length - 1
             message_to_encode_padded.extend([0] * padding_length)
         
         all_encoder_events = [] 
+        # Create or re-create encoder instance
         encoder = ConvolutionalEncoder(constraint_length=constraint_length, generators_octal=generators)
         encoder.add_listener(flask_encoder_listener)
-        encoder.load_message(message_to_encode_padded)
-        initial_event = all_encoder_events[0] if all_encoder_events else None
+        # Preserve existing puncturer if any, or user has to set it again.
+        # For simplicity, setting generator clears puncturer unless explicitly managed.
+        # Or, try to re-apply current puncturer if compatible.
+        # Current encoder.set_puncturer will raise error if streams don't match.
+        # Let's assume setting generator requires re-setting puncturer via UI.
+        # Or we can try:
+        current_puncturer_info = encoder.get_puncturer_info() # Get before load_message resets it in a way
+        
+        encoder.load_message(message_to_encode_padded) # This resets puncturer's period_index
 
+        if current_puncturer_info: # Try to re-apply if it was set
+            try:
+                # We need the key or matrix. Let's assume for now UI sends it again.
+                # This part needs robust handling if we want to auto-preserve.
+                # For now, if K or G changes, puncturer compatibility might change.
+                # User should re-select puncturing.
+                pass # encoder.set_puncturer(key_from_current_puncturer_info_if_available)
+            except ValueError as pe:
+                app.logger.warning(f"Could not re-apply previous puncturer after K/G change: {pe}")
+
+
+        initial_event = None
+        if all_encoder_events:
+            for e in all_encoder_events: # Find MESSAGE_LOADED
+                if e.get("type") == "MESSAGE_LOADED":
+                    initial_event = e
+                    break
+            if not initial_event: initial_event = all_encoder_events[0]
+        
+        # Return the full encoder state
         return jsonify({
             "status": "success",
             "message": "Encoder initialized and message loaded.",
             "initial_event": initial_event,
-            "config": {
-                "constraint_length": encoder.constraint_length,
-                "generators_octal": encoder.generators_octal,
-                "binary_generators": [''.join(map(str,bg)) for bg in encoder.binary_generators],
-                "original_message_length": len(parsed_message_bits),
-                "padded_message_length": len(message_to_encode_padded)
-            }
+            "encoder_state": get_current_encoder_state_dict(encoder) 
         })
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
-        # It's good practice to log the full exception server-side for debugging
         app.logger.error(f"Unexpected error in /set_generator: {e}", exc_info=True)
         return jsonify({"status": "error", "message": f"An unexpected error occurred: {str(e)}"}), 500
+
+@app.route('/set_puncturing', methods=['POST'])
+def set_puncturing_route():
+    global encoder, all_encoder_events
+    if encoder is None:
+        return jsonify({"status": "error", "message": "Encoder not initialized. Set K and G first."}), 400
+
+    data = request.get_json()
+    scheme_key = data.get('puncturing_scheme_key') # e.g., "2/3", "NONE", etc.
+    # custom_matrix = data.get('custom_matrix') # For future extension
+
+    try:
+        num_events_before = len(all_encoder_events)
+        encoder.set_puncturer(puncturing_scheme_key=scheme_key) # custom_matrix=custom_matrix)
+        
+        # Check if PUNCTURER_CONFIG_CHANGED event was fired
+        config_event = None
+        if len(all_encoder_events) > num_events_before:
+            for e in reversed(all_encoder_events[num_events_before:]):
+                if e.get("type") == "PUNCTURER_CONFIG_CHANGED":
+                    config_event = e
+                    break
+        
+        # If a message is already loaded, changing puncturing might invalidate previous steps.
+        # The encoder's internal buffers are NOT automatically re-processed by set_puncturer.
+        # A full message reload or encoder reset might be advisable for user clarity.
+        # For now, we assume user understands this or will reload message.
+        # The `load_message` in encoder now resets the puncturer's period index.
+
+        return jsonify({
+            "status": "success",
+            "message": f"Puncturing scheme set to: {encoder.get_puncturer_info()['label'] if encoder.get_puncturer_info() else 'None'}.",
+            "event": config_event,
+            "encoder_state": get_current_encoder_state_dict(encoder)
+        })
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e), "encoder_state": get_current_encoder_state_dict(encoder)}), 400
+    except Exception as e:
+        app.logger.error(f"Error setting puncturer: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": f"Unexpected error: {str(e)}", "encoder_state": get_current_encoder_state_dict(encoder)}), 500
+
 
 @app.route('/next_step', methods=['POST'])
 def next_step():
     global encoder, all_encoder_events
     if encoder is None:
-        return jsonify({"status": "error", "message": "Encoder not initialized. Set generator first."}), 400
+        return jsonify({"status": "error", "message": "Encoder not initialized."}), 400
 
     num_events_before_step = len(all_encoder_events)
-    step_outcome = encoder.go_to_next_step()
+    step_outcome = encoder.go_to_next_step() # This now handles puncturing
+    
     newly_generated_events = all_encoder_events[num_events_before_step:]
     primary_event_for_step = None
+    # Find ENCODE_STEP or ENCODING_COMPLETE
     if newly_generated_events:
         for e in reversed(newly_generated_events):
             if e.get("type") in ["ENCODE_STEP", "ENCODING_COMPLETE"]:
                 primary_event_for_step = e
                 break
-        if not primary_event_for_step and newly_generated_events: 
-            primary_event_for_step = newly_generated_events[-1]
+        if not primary_event_for_step: primary_event_for_step = newly_generated_events[-1]
             
     return jsonify({
         "status_from_method": step_outcome["status"], 
         "details_from_method": step_outcome.get("details"),
-        "output_bits_from_method": step_outcome.get("output_bits"),
-        "primary_event": primary_event_for_step,
-        "encoder_state_after_step": {
-            "memory": encoder.get_current_memory(),
-            "accumulated_output": encoder.get_current_encoded_data(),
-            "message_pointer": encoder.get_current_message_pointer(),
-            "is_complete": encoder.is_current_message_fully_encoded(),
-            "message_length": len(encoder.get_current_message()) if encoder.get_current_message() else 0
-        }
+        "output_bits_from_method": step_outcome.get("output_bits"), # This is the punctured output for the step
+        "primary_event": primary_event_for_step, # This event will contain both unpunctured and punctured
+        "encoder_state": get_current_encoder_state_dict(encoder)
     })
 
-# --- Viterbi Decoder Routes ---
+# --- Decoder Routes (Largely Unchanged from previous version) ---
+# ... (keep existing decoder routes: /decoder/load_sequence, /decoder/next_acs_step, etc.)
 @app.route('/decoder/load_sequence', methods=['POST'])
 def decoder_load_sequence():
     global viterbi_decoder_instance, all_decoder_events
@@ -192,7 +310,7 @@ def decoder_load_sequence():
                 raise ValueError("Received sequence must only contain 0s and 1s.")
             parsed_sequence = [int(bit) for bit in raw_bits]
         
-        all_decoder_events = [] # Fresh slate for events FOR THIS ACTION
+        all_decoder_events = [] 
         decoder = get_or_create_decoder() 
         
         load_outcome = decoder.load_received_sequence(parsed_sequence, num_original_bits)
@@ -206,10 +324,10 @@ def decoder_load_sequence():
             final_event_for_response = all_decoder_events[-1] 
 
         return jsonify({
-            "status": load_outcome.get("status", "error"), # Use status from method outcome
+            "status": load_outcome.get("status", "error"),
             "message": load_outcome.get("details", "Sequence load processed."),
-            "event": final_event_for_response, # Already sanitized by flask_decoder_listener
-            "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized by getter
+            "event": final_event_for_response,
+            "decoder_state": get_current_decoder_state_dict(decoder)
         })
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e), "decoder_state": get_current_decoder_state_dict(viterbi_decoder_instance)}), 400
@@ -219,11 +337,11 @@ def decoder_load_sequence():
 
 @app.route('/decoder/next_acs_step', methods=['POST'])
 def decoder_next_acs_step():
-    global viterbi_decoder_instance, all_decoder_events
+    global viterbi_decoder_instance, all_decoder_events # Corrected global name
     decoder = get_or_create_decoder()
     if not decoder.is_sequence_loaded:
         return jsonify({"status": "error", "message": "No sequence loaded.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
-    if decoder.is_acs_complete: # This is an info state, not an error preventing action
+    if decoder.is_acs_complete:
         return jsonify({"status": "info", "message": "ACS already complete.", "event": None, "decoder_state": get_current_decoder_state_dict(decoder)}), 200
 
     num_events_before_step = len(all_decoder_events)
@@ -242,19 +360,18 @@ def decoder_next_acs_step():
         "status": step_outcome.get("status", "success"), 
         "message": step_outcome.get("details", "ACS step performed."),
         "method_outcome": step_outcome, 
-        "event": primary_event, # Already sanitized
-        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
+        "event": primary_event,
+        "decoder_state": get_current_decoder_state_dict(decoder)
     })
 
 @app.route('/decoder/perform_traceback', methods=['POST'])
 def decoder_perform_traceback():
-    global viterbi_decoder_instance, all_decoder_events
+    global viterbi_decoder_instance, all_decoder_events # Corrected global name
     decoder = get_or_create_decoder()
     if not decoder.is_sequence_loaded:
         return jsonify({"status": "error", "message": "No sequence loaded.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
     if not decoder.is_acs_complete:
         return jsonify({"status": "error", "message": "ACS not yet complete.", "decoder_state": get_current_decoder_state_dict(decoder)}), 400
-    # Allow re-running traceback, so don't block if already complete.
 
     data = request.get_json()
     assume_zero_terminated = data.get('assume_zero_terminated', True)
@@ -275,29 +392,35 @@ def decoder_perform_traceback():
         "status": traceback_outcome.get("status", "success"), 
         "message": traceback_outcome.get("details", "Traceback performed."),
         "method_outcome": traceback_outcome,
-        "event": primary_event, # Sanitized
-        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
+        "event": primary_event,
+        "decoder_state": get_current_decoder_state_dict(decoder)
     })
 
 @app.route('/decoder/reset', methods=['POST'])
 def decoder_reset():
     global viterbi_decoder_instance, all_decoder_events
-    
     all_decoder_events = [] 
     viterbi_decoder_instance = None 
-    decoder = get_or_create_decoder() # Fires DECODER_RESET via init -> _reset_decoding_state -> notify
+    decoder = get_or_create_decoder()
 
     reset_event = None
-    if all_decoder_events: # DECODER_RESET should be the first and only event here
-        reset_event = all_decoder_events[0] # Already sanitized by flask_decoder_listener
+    if all_decoder_events:
+        reset_event = all_decoder_events[0]
 
     return jsonify({
-        "status": "success",
-        "message": "Decoder reset.",
-        "event": reset_event,
-        "decoder_state": get_current_decoder_state_dict(decoder) # Sanitized
+        "status": "success", "message": "Decoder reset.",
+        "event": reset_event, "decoder_state": get_current_decoder_state_dict(decoder)
     })
 
+
+def get_or_create_decoder(): # Moved here to be defined before use
+    global viterbi_decoder_instance
+    if viterbi_decoder_instance is None:
+        viterbi_decoder_instance = ViterbiDecoderK7G171_133_Stepwise()
+        viterbi_decoder_instance.add_listener(flask_decoder_listener)
+    return viterbi_decoder_instance
+    
+# --- Main ---
 def main():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=True) 
 
