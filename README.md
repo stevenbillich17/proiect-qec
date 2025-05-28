@@ -17,6 +17,19 @@ This application implements a simple convolutional encoder and Viterbi decoder u
 *   **Clear Output:** Displays the original input, encoded output, received/noisy output, and the final decoded output.
 *   **Success/Failure Indication:** Shows whether the decoded message matches the original input.
 
+![Decoder Screenshot](decoderImage.jpg)
+*   **DECODER** Dedicated section in `index.html` for decoder controls and output.
+*   **Sequence Loading:** Input for received sequence and number of original message bits.
+*   **Stepwise ACS:** Button to advance through Add-Compare-Select stages one at a time.
+    *   *Live state updates* for current stage, total stages, and path metrics (summary).
+    *   *Detailed event logging* in the UI and browser console.
+*   **Traceback:** Button to perform traceback, with an option to assume zero-termination.
+    *   Displays the *final decoded message*.
+*   **State Management:** Backend Flask routes (`/decoder/*`) to handle decoder logic and state.
+*   **Event System:** Decoder backend (`ViterbiDecoderK7G171_133_Stepwise`) emits events captured by Flask and sent to the UI.
+*   **JSON `Infinity` Fix:** Resolved issue with `float('inf')` in path metrics breaking client-side JSON parsing.
+
+
 ## Prerequisites
 
 *   Python 3.7+
